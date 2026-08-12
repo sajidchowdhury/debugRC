@@ -367,15 +367,23 @@ class SalesCartController extends Controller
 
     /**
      * AJAX: Check product availability for the branch.
+     *
+     * Dispatch-branch enhancement: accepts an optional `branch_id` param
+     * so the cart can check stock at a different branch than the session
+     * branch. If omitted, falls back to session('branch_id') as before.
+     * The branch_id must exist in the branches table (validated).
      */
     public function checkAvailability(Request $request)
     {
         $request->validate([
             'product_id' => 'required|integer|exists:products,id',
+            'branch_id'  => 'nullable|integer|exists:branches,id',
         ]);
 
         $productId = (int) $request->input('product_id');
-        $branchId = session('branch_id', 0);
+        // Use the explicitly passed branch_id (dispatch branch) if valid,
+        // otherwise fall back to session branch_id.
+        $branchId = (int) ($request->input('branch_id') ?? session('branch_id', 0));
         $excludeInvoiceId = $request->input('exclude_invoice_id') ? (int) $request->input('exclude_invoice_id') : null;
 
         $available = $this->availabilityService->getBranchAvailableQty($productId, $branchId, $excludeInvoiceId);

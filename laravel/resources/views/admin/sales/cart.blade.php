@@ -24,6 +24,9 @@
     }
 
     $branchName = session('branch_name', 'No Branch');
+    // Dispatch-branch enhancement: load all active branches for the
+    // dispatch-to dropdown in the cart meta grid + warehouse modal.
+    $allBranches = \App\Models\Branch::active()->orderBy('branch_name')->get(['id', 'branch_name', 'branch_code']);
 @endphp
 
 {{--
@@ -132,10 +135,21 @@
                         {{-- Meta grid (legacy L49-70) — was missing in Laravel --}}
                         <div class="mt-3 sales-meta-grid">
                             <div>
-                                <label class="form-label small">Branch</label>
+                                <label class="form-label small">
+                                    <i class="fas fa-truck me-1 text-info"></i>Dispatch to branch
+                                </label>
                                 <select id="branch_id" class="form-select">
-                                    <option value="{{ (int) $branchId }}" selected>{{ $branchName }}</option>
+                                    @foreach($allBranches as $b)
+                                        <option value="{{ $b->id }}"
+                                                {{ (int) $b->id === (int) $branchId ? 'selected' : '' }}
+                                                data-branch-name="{{ $b->branch_name }}"
+                                                data-branch-code="{{ $b->branch_code }}">
+                                            {{ $b->branch_name }}
+                                            @if($b->branch_code) ({{ $b->branch_code }})@endif
+                                        </option>
+                                    @endforeach
                                 </select>
+                                <small class="text-muted d-block mt-1">Invoice will appear on this branch's warehouse manager dashboard</small>
                             </div>
                             <div>
                                 <label class="form-label small">Date</label>
@@ -202,10 +216,10 @@
 
                         {{-- Stock availability banner (legacy L99) --}}
                         {{-- Stock availability banner (legacy L99 + image B parity).
-                             Teal banner shows: "Available [branch badge] N
+                             Teal banner shows: "Available [dispatch branch badge] N
                              [Warehouse & pipeline button]". The button
                              opens a modal with per-warehouse stock +
-                             pipeline amount breakdown. --}}
+                             pipeline amount breakdown for the selected dispatch branch. --}}
                         <div id="BranchStock" class="sales-stock-banner d-none">
                             <div class="stock-banner-inner">
                                 <div class="stock-stat">
@@ -213,9 +227,14 @@
                                     <span id="addAvailBranchBadge" class="badge bg-dark bg-opacity-50 ms-1">—</span>
                                     <span class="stock-value" id="addAvailTotal">—</span>
                                 </div>
-                                <button type="button" id="btnWarehousePipeline" class="btn btn-sm btn-outline-light ms-auto" title="Per-warehouse stock + pipeline breakdown">
-                                    <i class="fas fa-warehouse me-1"></i> Warehouse &amp; pipeline
-                                </button>
+                                <div class="d-flex align-items-center gap-2 ms-auto">
+                                    <span id="dispatchBranchHint" class="badge bg-info bg-opacity-75 text-white" style="font-size:0.7rem">
+                                        <i class="fas fa-truck me-1"></i><span id="dispatchBranchHintText">{{ $branchName }}</span>
+                                    </span>
+                                    <button type="button" id="btnWarehousePipeline" class="btn btn-sm btn-outline-light" title="Per-warehouse stock + pipeline breakdown for dispatch branch">
+                                        <i class="fas fa-warehouse me-1"></i> Warehouse &amp; pipeline
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -738,6 +757,27 @@
         .sales-cart-desktop { display: none !important; }
         .sales-cart-mobile { display: block !important; }
     }
+
+    /* Dispatch-branch: Warehouse & Pipeline modal improvements */
+    .sales-warehouse-modal {
+        font-size: 0.9rem;
+    }
+    .sales-warehouse-modal .table th {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .sales-warehouse-modal .table td {
+        vertical-align: middle;
+    }
+    .sales-warehouse-modal select.form-select {
+        border-radius: 0.375rem;
+    }
+    /* Dispatch branch hint badge in stock banner */
+    #dispatchBranchHint {
+        animation: none;
+        transition: background-color 0.2s;
+    }
 </style>
 @endpush
 
@@ -748,9 +788,17 @@
 
     // -------- Bootstrap data from server --------
     var BRANCH_ID   = parseInt(document.getElementById('salesCartApp').dataset.branchId || '0', 10);
+    var SESSION_BRANCH_ID = BRANCH_ID; // immutable: the user's actual session branch
     var INITIAL_CID = document.getElementById('salesCartApp').dataset.customerId;
     var INITIAL_CART = @json($initialCart);
     var CSRF_TOKEN  = window.CSRF_TOKEN;
+
+    // Dispatch-branch: active branch name for the stock banner.
+    // Updated whenever the #branch_id dropdown changes.
+    window.ACTIVE_BRANCH_NAME = '{{ $branchName }}';
+
+    // All branches data (for the warehouse modal branch filter).
+    var ALL_BRANCHES = @json($allBranches->map(fn($b) => ['id' => $b->id, 'branch_name' => $b->branch_name, 'branch_code' => $b->branch_code])->values());
 
     // -------- AJAX base helpers --------
     function ajaxPost(url, payload) {
@@ -1868,15 +1916,13 @@
 
     /**
      * Image B parity: "Warehouse & pipeline" button click handler.
-     * Shows a SweetAlert modal with per-warehouse stock + pipeline
-     * amount breakdown for the currently-selected product.
-     * Mirrors legacy "BranchStock" detail view (sales-create.js
-     * showStockInfoCreate L420-454 — legacy used a separate modal;
-     * we use SweetAlert2 which is already loaded).
+     * Shows a SweetAlert modal with a dispatch-branch selector +
+     * per-warehouse stock + pipeline amount breakdown for the
+     * currently-selected product.
      *
-     * Reuses state.availBreakdown (populated by checkAvailability()).
-     * Falls back to a fresh ajaxGet(ENDPOINTS.availability) call if
-     * the cache is empty.
+     * Dispatch-branch enhancement: the modal now has a branch dropdown
+     * at the top so the user can check stock at ANY branch's warehouses,
+     * not just the currently-selected dispatch branch.
      */
     function showWarehousePipelineModal() {
         if (!state.activeProductId) {
@@ -1888,18 +1934,32 @@
             });
             return;
         }
-        var render = function (breakdown) {
+
+        var render = function (breakdown, branchName) {
             var rows = breakdown || [];
             var totalPhys = 0, totalPipe = 0, totalAvail = 0;
-            var html = '<div class="table-responsive"><table class="table table-sm mb-0">' +
+            var html = '';
+
+            // Branch selector dropdown
+            html += '<div class="mb-3">';
+            html += '<label class="form-label small fw-semibold"><i class="fas fa-code-branch me-1"></i>Dispatch branch</label>';
+            html += '<select id="wmBranchSelect" class="form-select form-select-sm">';
+            ALL_BRANCHES.forEach(function (b) {
+                var selected = (parseInt(b.id) === parseInt(BRANCH_ID)) ? ' selected' : '';
+                html += '<option value="' + b.id + '"' + selected + '>' + escHtml(b.branch_name) + (b.branch_code ? ' (' + escHtml(b.branch_code) + ')' : '') + '</option>';
+            });
+            html += '</select></div>';
+
+            // Warehouse table
+            html += '<div class="table-responsive"><table class="table table-sm table-bordered mb-0">' +
                 '<thead class="table-light"><tr>' +
                     '<th>Warehouse</th>' +
-                    '<th class="text-end">Physical</th>' +
-                    '<th class="text-end">Pipeline</th>' +
-                    '<th class="text-end">Available</th>' +
+                    '<th class="text-end" style="width:90px">Physical</th>' +
+                    '<th class="text-end" style="width:90px">Pipeline</th>' +
+                    '<th class="text-end" style="width:90px">Available</th>' +
                 '</tr></thead><tbody>';
             if (rows.length === 0) {
-                html += '<tr><td colspan="4" class="text-center text-muted py-3">No warehouse data.</td></tr>';
+                html += '<tr><td colspan="4" class="text-center text-muted py-3">No warehouses found for this branch.</td></tr>';
             } else {
                 rows.forEach(function (w) {
                     var phys  = parseFloat(w.physical_qty || 0);
@@ -1908,41 +1968,117 @@
                     totalPhys  += phys;
                     totalPipe  += pipe;
                     totalAvail += avail;
+                    var availClass = avail > 0 ? 'text-success' : 'text-danger';
                     html += '<tr>' +
-                        '<td>' + escHtml(w.warehouse_name || ('#' + w.warehouse_id)) + '</td>' +
+                        '<td><i class="fas fa-warehouse me-1 text-muted"></i>' + escHtml(w.warehouse_name || ('#' + w.warehouse_id)) + '</td>' +
                         '<td class="text-end">' + fmtQty(phys) + '</td>' +
                         '<td class="text-end text-warning">' + fmtQty(pipe) + '</td>' +
-                        '<td class="text-end fw-semibold text-success">' + fmtQty(avail) + '</td>' +
+                        '<td class="text-end fw-semibold ' + availClass + '">' + fmtQty(avail) + '</td>' +
                     '</tr>';
                 });
             }
             html += '</tbody><tfoot class="table-light"><tr>' +
-                '<th>Total</th>' +
+                '<th>Total (' + escHtml(branchName || 'Branch') + ')</th>' +
                 '<th class="text-end">' + fmtQty(totalPhys) + '</th>' +
                 '<th class="text-end">' + fmtQty(totalPipe) + '</th>' +
                 '<th class="text-end">' + fmtQty(totalAvail) + '</th>' +
             '</tr></tfoot></table></div>';
+
             Swal.update({ html: html, showConfirmButton: true, confirmButtonText: 'Close' });
+
+            // Wire the branch selector to reload data
+            setTimeout(function () {
+                $('#wmBranchSelect').off('change').on('change', function () {
+                    var newBranchId = parseInt($(this).val(), 10);
+                    if (!newBranchId || !state.activeProductId) return;
+                    Swal.update({
+                        html: '<div class="text-center py-3"><i class="fas fa-spinner fa-spin me-1"></i>Loading breakdown...</div>',
+                        showConfirmButton: false
+                    });
+                    ajaxGet(ENDPOINTS.availability, { product_id: state.activeProductId, branch_id: newBranchId })
+                        .done(function (payload) {
+                            var bName = '';
+                            ALL_BRANCHES.forEach(function (b) { if (parseInt(b.id) === newBranchId) bName = b.branch_name; });
+                            render(payload.warehouse_breakdown || [], bName);
+                        })
+                        .fail(function () {
+                            Swal.update({ html: '<div class="text-danger py-3">Failed to load warehouse breakdown. Try again.</div>', showConfirmButton: true, confirmButtonText: 'Close' });
+                        });
+                });
+            }, 100);
         };
+
+        // Get the current branch name for the header
+        var currentBranchName = '';
+        ALL_BRANCHES.forEach(function (b) { if (parseInt(b.id) === parseInt(BRANCH_ID)) currentBranchName = b.branch_name; });
+
         Swal.fire({
-            title: 'Warehouse & pipeline',
-            html: '<div class="text-center"><i class="fas fa-spinner fa-spin me-1"></i>Loading breakdown...</div>',
+            title: '<i class="fas fa-warehouse me-2"></i>Warehouse & Pipeline',
+            html: '<div class="text-center py-3"><i class="fas fa-spinner fa-spin me-1"></i>Loading breakdown...</div>',
             showCancelButton: false,
             showConfirmButton: false,
+            width: 600,
             customClass: { popup: 'sales-warehouse-modal' }
         });
-        // Use cached breakdown if available; otherwise fetch.
-        if (state.availBreakdown && state.availBreakdown.length) {
-            render(state.availBreakdown);
-        } else {
-            ajaxGet(ENDPOINTS.availability, { product_id: state.activeProductId })
-                .done(function (payload) {
-                    state.availBreakdown = payload.warehouse_breakdown || [];
-                    render(state.availBreakdown);
-                })
-                .fail(function () {
-                    Swal.update({ html: '<div class="text-danger">Failed to load warehouse breakdown. Try again.</div>', showConfirmButton: true, confirmButtonText: 'Close' });
-                });
+        // Always fetch fresh data for the selected dispatch branch
+        ajaxGet(ENDPOINTS.availability, { product_id: state.activeProductId, branch_id: BRANCH_ID })
+            .done(function (payload) {
+                state.availBreakdown = payload.warehouse_breakdown || [];
+                render(state.availBreakdown, currentBranchName);
+            })
+            .fail(function () {
+                Swal.update({ html: '<div class="text-danger py-3">Failed to load warehouse breakdown. Try again.</div>', showConfirmButton: true, confirmButtonText: 'Close' });
+            });
+    }
+
+    /**
+     * Dispatch-branch change handler.
+     * When the user changes the "Dispatch to branch" dropdown:
+     *   1. Updates BRANCH_ID (used by finalize, product search, etc.)
+     *   2. Updates ACTIVE_BRANCH_NAME (used by stock banner)
+     *   3. Updates the dispatch branch hint badge
+     *   4. Refreshes stock availability for the currently-selected product
+     *   5. Invalidates the product cache so search returns fresh results
+     *      for the new branch
+     */
+    function onDispatchBranchChange() {
+        var $sel = $('#branch_id');
+        var newBranchId = parseInt($sel.val(), 10);
+        var $opt = $sel.find('option:selected');
+        var newBranchName = $opt.data('branch-name') || $opt.text() || 'Branch';
+
+        if (!newBranchId || newBranchId === BRANCH_ID) return;
+
+        // Update the global dispatch branch ID and name
+        BRANCH_ID = newBranchId;
+        window.ACTIVE_BRANCH_NAME = newBranchName;
+
+        // Update the dispatch branch hint badge in the stock banner
+        $('#dispatchBranchHintText').text(newBranchName);
+        $('#addAvailBranchBadge').text(newBranchName);
+
+        // Clear product cache so next search hits the new branch
+        productCache = {};
+
+        // Re-check availability for the currently-selected product
+        if (state.activeProductId) {
+            checkAvailability(state.activeProductId);
+            // Also update the stock banner from the product cache
+            var p = productCache[state.activeProductId];
+            if (p) showStockBanner(p);
+        }
+
+        // If a search term is active, re-trigger search for the new branch
+        var $search = $('#productSearch');
+        var term = ($search.val() || '').trim();
+        if (term.length >= 2) {
+            $search.trigger('input');
+        }
+
+        // Show a brief toast confirming the dispatch branch change
+        var isDifferent = (BRANCH_ID !== SESSION_BRANCH_ID);
+        if (isDifferent) {
+            toast('Dispatch branch changed to ' + newBranchName + '. Stock now shows that branch\'s availability.', 'info');
         }
     }
 
@@ -2484,7 +2620,9 @@
             renderAvailability(null);
             return;
         }
-        ajaxGet(ENDPOINTS.availability, { product_id: productId })
+        // Dispatch-branch enhancement: pass the current dispatch branch_id
+        // so availability is checked at the correct branch.
+        ajaxGet(ENDPOINTS.availability, { product_id: productId, branch_id: BRANCH_ID })
             .done(function (payload) {
                 state.availBreakdown = payload.warehouse_breakdown || [];
                 state.availProductId = productId;
@@ -2940,6 +3078,11 @@
         // Image B parity: "Warehouse & pipeline" button shows per-warehouse
         // breakdown in a SweetAlert modal.
         $('#btnWarehousePipeline').on('click', showWarehousePipelineModal);
+
+        // Dispatch-branch enhancement: when the user changes the dispatch
+        // branch dropdown, update BRANCH_ID, refresh stock for the
+        // currently-selected product, and re-trigger product search.
+        $('#branch_id').on('change', onDispatchBranchChange);
         $('#btnFinalize').on('click', function () {
             finalizeInvoice();
         });
