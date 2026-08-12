@@ -67,6 +67,47 @@ class SalesAccess
     }
 
     /**
+     * Assert the user can dispatch (create) an invoice for the given branch.
+     *
+     * Unlike assertBranchAccessible() which blocks cross-branch READ access,
+     * this method allows salesman/manager to CREATE an invoice dispatched
+     * to any active branch. Business requirement: a salesman at branch A
+     * can create an invoice dispatched to branch B when the customer's
+     * products are not available locally. The invoice then appears on
+     * branch B's warehouse manager dashboard, not branch A's.
+     *
+     * Only admin/superadmin/manager/salesman can finalize (enforced by
+     * route middleware). This method simply validates that the target
+     * branch exists — the actual role check is on the route.
+     *
+     * @param int $dispatchBranchId The branch_id the invoice will be dispatched to.
+     * @throws RuntimeException If branch does not exist.
+     */
+    public function assertCanDispatchToBranch(int $dispatchBranchId): void
+    {
+        if ($dispatchBranchId <= 0) {
+            throw new RuntimeException('Dispatch branch is required.');
+        }
+
+        // Validate the branch exists and is active.
+        $branch = DB::table('branches')
+            ->where('id', $dispatchBranchId)
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->exists();
+
+        if (!$branch) {
+            throw new RuntimeException(
+                'Cannot dispatch to branch ' . $dispatchBranchId . ' — branch not found or inactive.'
+            );
+        }
+
+        // No cross-branch restriction — any salesman/manager can dispatch
+        // to any active branch. The invoice will appear on that branch's
+        // warehouse manager dashboard (filtered by BranchScope).
+    }
+
+    /**
      * Resolve the branch_id to use for a write operation.
      *
      * - Create (no existing branch): returns session branch_id for non-admins,

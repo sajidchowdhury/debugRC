@@ -89,8 +89,12 @@ class SalesInvoiceService
             throw new \InvalidArgumentException('branch_id is required.');
         }
 
-        // P0-8: Defense-in-depth branch isolation check.
-        $this->salesAccess->assertBranchAccessible($branchId);
+        // P0-8: Dispatch-branch check.
+        // A salesman/manager can create an invoice dispatched to ANY active
+        // branch (not just their own). The invoice will appear on that
+        // branch's warehouse manager dashboard. This is different from
+        // assertBranchAccessible() which blocks cross-branch READ access.
+        $this->salesAccess->assertCanDispatchToBranch($branchId);
 
         // Step 1: Load + validate the cart.
         $cartData = $this->cartService->getCart($data['created_by'] ?? auth()->id(), $customerId, $branchId);
