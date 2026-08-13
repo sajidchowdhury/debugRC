@@ -102,6 +102,7 @@ Route::middleware('auth')->group(function () {
     Route::prefix('help')->middleware('throttle:30,1')->group(function () {
         Route::get('menu/{key}', [HelpController::class, 'menu'])->name('help.menu');
         Route::get('module/{key}', [HelpController::class, 'module'])->name('help.module');
+        Route::get('debug', [HelpController::class, 'debug'])->name('help.debug');
     });
 
     // ============================================================
