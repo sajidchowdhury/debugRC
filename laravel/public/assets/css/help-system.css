@@ -1198,3 +1198,57 @@ body:has(.help-footer-bar) footer.mt-auto { margin-bottom: 44px; }
     outline: 2px solid rgba(255,255,255,0.5);
     outline-offset: 2px;
 }
+
+/* =========================================================================
+   Fix 1 — Cart page: sticky finalize bar + help footer coexistence.
+   When .sales-pos-sticky-bar.visible is present (cart page), lift the help
+   footer pill and FAB above the finalize bar (~56px tall). The pill sits
+   neatly just above the white bar; the FAB floats higher too.
+   ========================================================================= */
+body:has(.sales-pos-sticky-bar.visible) .help-footer-bar {
+    bottom: 56px;                       /* lift above the finalize bar */
+}
+body:has(.sales-pos-sticky-bar.visible) .help-footer-pill {
+    margin-bottom: 0;                   /* remove extra 8px gap — sits flush above bar */
+    box-shadow: 0 -2px 12px -2px rgba(15, 23, 42, 0.15);
+}
+body:has(.sales-pos-sticky-bar.visible) .help-fab {
+    bottom: 124px;                      /* 56px bar + ~40px pill + 28px gap */
+}
+/* Fallback for browsers without :has() — JS adds a class to body */
+body.help-sticky-bar-active .help-footer-bar { bottom: 56px; }
+body.help-sticky-bar-active .help-footer-pill { margin-bottom: 0; box-shadow: 0 -2px 12px -2px rgba(15, 23, 42, 0.15); }
+body.help-sticky-bar-active .help-fab { bottom: 124px; }
+
+/* =========================================================================
+   Fix 2 — ERP layout pages (challans, invoices, returns): base font is
+   0.875rem on .sc-app, making help offcanvas text too small. Override
+   font-size inside help offcanvas bodies to guarantee readability.
+   ========================================================================= */
+.help-offcanvas__body,
+.help-module-offcanvas__body,
+.help-module-sheet__body {
+    font-size: 0.9375rem;               /* 15px — readable on all layouts */
+    line-height: 1.55;
+}
+/* Ensure action list items, summary text, and section labels are also readable */
+.help-offcanvas__body .help-icon-list li,
+.help-module-offcanvas__body .help-icon-list li {
+    font-size: 0.9375rem;
+}
+.help-offcanvas__body .help-menu-content__summary,
+.help-module-offcanvas__body .help-menu-content__summary {
+    font-size: 0.9375rem;
+}
+.help-offcanvas__body .help-impacts-table,
+.help-module-offcanvas__body .help-impacts-table {
+    font-size: 0.9rem;
+}
+.help-offcanvas__body .help-callout,
+.help-module-offcanvas__body .help-callout {
+    font-size: 0.9rem;
+}
+.help-offcanvas__body .help-section-label,
+.help-module-offcanvas__body .help-section-label {
+    font-size: 0.78rem;
+}

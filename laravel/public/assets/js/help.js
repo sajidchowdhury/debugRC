@@ -840,4 +840,31 @@
             openMenuOffcanvas(key, false);
         }
     });
+
+    // ---- Sticky-bar observer (cart page finalize bar coexistence) ----
+    // When a .sales-pos-sticky-bar becomes visible, add a class to <body>
+    // so the CSS can lift the help footer pill + FAB above the bar.
+    // This is a fallback for browsers without CSS :has() support.
+    (function initStickyBarObserver() {
+        var bar = document.getElementById('posStickyBar');
+        if (!bar) return;
+
+        function sync() {
+            var isVisible = bar.classList.contains('visible');
+            document.body.classList.toggle('help-sticky-bar-active', isVisible);
+        }
+
+        // Observe class changes on the sticky bar
+        if (window.MutationObserver) {
+            var observer = new MutationObserver(sync);
+            observer.observe(bar, { attributes: false, attributeFilter: ['class'], subtree: false });
+            // MutationObserver with attributeFilter only watches attributes; for class
+            // changes we need attributes: true
+            observer.disconnect();
+            observer.observe(bar, { attributes: true, attributeFilter: ['class'] });
+        }
+        // Also sync on page load and periodic check (belt + suspenders)
+        sync();
+        setInterval(sync, 2000);
+    })();
 })();

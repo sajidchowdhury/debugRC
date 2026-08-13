@@ -53,6 +53,11 @@
             color: #cbd5e1;                              /* slate-300 */
             border-right: 1px solid #1e293b;             /* slate-800 */
             width: 260px;
+            position: fixed !important;                  /* win over .sidebar in custom.css */
+            top: 56px;                                   /* below sticky top-nav (always) */
+            left: 0;
+            z-index: 40 !important;                      /* below top-nav z-50, above content */
+            overflow-y: auto;
         }
         #sidebar .sidebar-header {
             padding: 14px 18px;
@@ -160,13 +165,7 @@
         /* ===== DESKTOP (>= lg / 992px) — fixed sidebar + offset main ===== */
         @media (min-width: 992px) {
             #sidebar {
-                position: fixed !important;
-                top: 56px;                                /* below sticky top-nav */
-                left: 0;
-                bottom: 0;
                 height: calc(100vh - 56px) !important;
-                width: 260px;
-                z-index: 40;                             /* below top-nav z-50 */
             }
             /* Offset main content to account for the fixed 260px sidebar.
                Overrides Bootstrap col-lg-10 + ms-auto which misaligns with
