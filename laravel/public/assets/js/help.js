@@ -807,4 +807,37 @@
         var el = document.getElementById(id);
         if (el) el.addEventListener('show.bs.offcanvas', function () { toggleRecentPopover(false); });
     });
+
+    // =====================================================================
+    // Global API — expose openMenuOffcanvas so page-level ? buttons can call it.
+    // Usage from any page: window.RC_HELP.open('master-data.branches')
+    // Also supports data-page-help="menu-key" on any clickable element.
+    // =====================================================================
+    window.RC_HELP = {
+        /** Open the help offcanvas for a specific menu key. */
+        open: function (menuKey) {
+            openMenuOffcanvas(menuKey || '', false);
+        },
+        /** Open the module sheet (Door 2). */
+        openModuleSheet: function () {
+            openModuleSheet();
+        },
+        /** Get the current page's menu key. */
+        currentKey: function () {
+            return CFG.currentMenuKey || '';
+        }
+    };
+
+    // ---- Auto-wire [data-page-help] clickable elements ----
+    // Any element with data-page-help="menu.key" will open that help on click.
+    // Example: <button data-page-help="master-data.branches">?</button>
+    document.addEventListener('click', function (e) {
+        var trigger = e.target.closest('[data-page-help]');
+        if (trigger) {
+            e.preventDefault();
+            e.stopPropagation();
+            var key = trigger.getAttribute('data-page-help') || CFG.currentMenuKey || '';
+            openMenuOffcanvas(key, false);
+        }
+    });
 })();

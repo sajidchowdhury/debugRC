@@ -1182,3 +1182,19 @@ body:has(.help-footer-bar) footer.mt-auto { margin-bottom: 44px; }
         transition: none !important;
     }
 }
+
+/* ----- Page-level ? help trigger (data-page-help) ----- */
+/* Small circular button that can be placed in any page header.
+   Uses data-page-help="menu.key" attribute; help.js auto-wires clicks. */
+[data-page-help] {
+    cursor: pointer;
+    transition: transform 200ms ease, box-shadow 200ms ease, background 200ms ease;
+}
+[data-page-help]:hover {
+    transform: scale(1.12);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+[data-page-help]:focus-visible {
+    outline: 2px solid rgba(255,255,255,0.5);
+    outline-offset: 2px;
+}
