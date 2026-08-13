@@ -4,37 +4,41 @@
  * Help content for: accounting.approvals-workflows
  * Route: admin.approvals.workflows
  *
- * Approval Workflows configuration page — define which role/user can approve
- * which type of posting (journal, money-transfer, supplier-payment, etc.),
- * amount thresholds, and multi-step chains.
- *
- * @see docs/HELP_SYSTEM_IMPLEMENTATION_PLAN.md §5.1 (schema), §5.2 (sub-page convention)
+ * Enriched Bangla guideline — explains workflow configuration: entity type,
+ * min amount, branch specificity, multi-level steps, and how resolution works.
  */
 
 return [
     'key'        => 'accounting.approvals-workflows',
     'module'     => 'accounting',
-    'title_bn'   => 'অ্যাপ্রুভাল ওয়ার্কফ্লো',
-    'title_en'   => 'Approval Workflows',
+    'title_bn'   => 'অ্যাপ্রুভাল ওয়ার্কফ্লো কনফিগারেশন',
+    'title_en'   => 'Approval Workflow Configuration',
     'icon'       => 'fa-diagram-project',
-    'summary'    => 'এটি approvals-এর কনফিগ পেজ — কে কোন ধরনের পোস্টিং অ্যাপ্রুভ করতে পারবে, অ্যামাউন্ট লিমিট কত, তা সেট করা হয়।',
+    'summary'    => 'এটি অ্যাপ্রুভাল সিস্টেমের কনফিগ পেজ। কোন ধরনের এন্ট্রি (জার্নাল/ড্যামেজ/পারচেজ) অ্যাপ্রুভাল চাইবে, কত টাকা থেকে শুরু, কোন ব্র্যাঞ্চে, কতগুলো লেভেল — সব এখানে সেট করা হয়। ওয়ার্কফ্লো না ম্যাচ করলে এন্ট্রি অটো-অ্যাপ্রুভ হয়ে যায়।',
 
     'for_roles'  => ['admin', 'superadmin', 'accountant', 'manager'],
 
     'what_you_can_do' => [
-        ['icon' => 'fa-diagram-project', 'text' => 'ওয়ার্কফ্লো নিয়ম তৈরি/এডিট করা (ধরন, অ্যাপ্রুভার, লিমিট)'],
-        ['icon' => 'fa-eye',             'text' => 'সজল ওয়ার্কফ্লোর তালিকা দেখা'],
+        ['icon' => 'fa-diagram-project',  'text' => 'ওয়ার্কফ্লো দেখুন — প্রতিটি ওয়ার্কফ্লো কার্ড আকারে দেখানো হয়: নাম, এন্টিটি টাইপ, মিনিমাম অ্যামাউন্ট, লেভেল, প্রতিটি লেভেলে কোন রোল অ্যাপ্রুভ করবে।'],
+        ['icon' => 'fa-toggle-on',        'text' => 'অ্যাক্টিভ/ইনঅ্যাক্টিভ টগল — চালু করলে নতুন পেন্ডিং আইটেম এই নিয়মে রুট হবে; বন্ধ করলে ওই ধরনের এন্ট্রি অটো-অ্যাপ্রুভ হবে।'],
+        ['icon' => 'fa-money-bill-wave',  'text' => 'মিনিমাম অ্যামাউন্ট সেট — যেমন ৫,০০০ টাকা থেকে বেশি হলেই অ্যাপ্রুভাল চাইবে। এর নিচে হলে অটো-অ্যাপ্রুভ। কার্ডেই ইনলাইন এডিট করা যায়।'],
+        ['icon' => 'fa-code-branch',      'text' => 'ব্র্যাঞ্চ-নির্দিষ্ট বা গ্লোবাল — branch_id খালি রাখলে সব ব্র্যাঞ্চে কাজ করবে; নির্দিষ্ট ব্র্যাঞ্চ দিলে ওই ব্র্যাঞ্চের জন্যই কাজ করবে (গ্লোবালের থেকে প্রায়রিটি বেশি)।'],
+        ['icon' => 'fa-layer-group',      'text' => 'মাল্টি-লেভেল স্টেপ — লেভেল ১, ২, ৩… প্রতিটি লেভেলে কোন রোল অ্যাপ্রুভ করবে তা সেট করুন। সব লেভেল পাস করলেই ফাইনাল অ্যাপ্রুভ। admin/superadmin যেকোনো লেভেলে অ্যাপ্রুভ করতে পারে।'],
     ],
 
     'impacts' => [
-        ['who' => 'অ্যাপ্রুভাল কিউ', 'what' => 'নতুন পেন্ডিং আইটেম এই নিয়ম ধরে রুট হবে'],
+        ['who' => 'অ্যাপ্রুভাল কিউ',     'what' => 'নতুন পেন্ডিং আইটেম এই ওয়ার্কফ্লো অনুযায়ী রুট হবে — কোন রোল, কত লেভেল, তা এখানে নির্ভর।'],
+        ['who' => 'অটো-অ্যাপ্রুভ',        'what' => 'কোনো ওয়ার্কফ্লো ম্যাচ না করলে (অ্যামাউন্ট কম বা টাইপ মিলছে না) এন্ট্রি সরাসরি অ্যাপ্রুভ হয়ে যায়।'],
+        ['who' => 'ব্র্যাঞ্চ আইসোলেশন',  'what' => 'ব্র্যাঞ্চ-নির্দিষ্ট ওয়ার্কফ্লো গ্লোবালের থেকে প্রায়রিটি পাবে — একই অ্যামাউন্টে ব্র্যাঞ্চ-নির্দিষ্ট থাকলে ওটাই ব্যবহৃত হবে।'],
     ],
 
     'cautions' => [
-        'নিয়ম বদলালে নতুন পেন্ডিং আইটেমে কাজ করবে — আগের পেন্ডিং আইটেম পুরোনো নিয়মেই থাকে।',
+        'ওয়ার্কফ্লো বদলালে নতুন পেন্ডিং আইটেমে কাজ করবে — ইতিমধ্যে পেন্ডিং থাকা আইটেম পুরোনো নিয়মেই প্রসেস হবে।',
+        'একটি এন্টিটি টাইপে একাধিক ওয়ার্কফ্লো থাকলে সবচেয়ে বেশি min_amount ওয়ালা (আর ব্র্যাঞ্চ-নির্দিষ্ট) ম্যাচ করবে।',
+        'প্যারালাল অ্যাপ্রুভাল (এক লেভেলে একাধিক অ্যাপ্রুভার) বর্তমানে রিজার্ভড — সিস্টেম এখনো সিঙ্গল-অ্যাপ্রুভার-পার-লেভেল ব্যবহার করে।',
     ],
 
-    'related' => ['accounting.approvals', 'accounting.manual-journals'],
+    'related' => ['accounting.approvals', 'accounting.manual-journals', 'accounting.money-transfers', 'master-data.branches', 'system.users'],
 
-    'updated_at' => '2026-08-07',
+    'updated_at' => '2026-08-13',
 ];
