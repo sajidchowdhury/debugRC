@@ -144,6 +144,7 @@ return [
             'sales.customer-payments-slip',
             'sales.go-live-checklist',
             'sales.guide',
+            'sales.audit',
             'sales.invoices',
             'sales.invoices-audit',
             'sales.invoices-print-blank-godown',

@@ -189,7 +189,7 @@ return [
     'admin.sales-returns.index' => 'sales.returns',
     'admin.sales-returns.print-slip' => 'sales.returns-print-slip',
     'admin.sales-returns.reverse-preview' => 'sales.returns-reverse-preview',
-    'admin.sales.audit' => 'sales.invoices-audit',
+    'admin.sales.audit' => 'sales.audit',
     'admin.sales.cart' => 'sales.cart',
     'admin.sales.go-live-checklist' => 'sales.go-live-checklist',
     'admin.sales.guide' => 'sales.guide',
