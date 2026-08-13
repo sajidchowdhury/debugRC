@@ -166,8 +166,9 @@ class HelpService
         }
         [$module, $slug] = $parts;
 
-        // Guard against path traversal — only allow [a-z0-9-] in module/slug.
-        if (!preg_match('/^[a-z0-9-]+$/', $module) || !preg_match('/^[a-z0-9-]+$/', $slug)) {
+        // Guard against path traversal — only allow [a-zA-Z0-9-] in module/slug.
+        // Uppercase allowed because many menu slugs use camelCase (e.g. grossMarginCte, balanceSheet).
+        if (!preg_match('/^[a-zA-Z0-9-]+$/', $module) || !preg_match('/^[a-zA-Z0-9-]+$/', $slug)) {
             return null;
         }
 
