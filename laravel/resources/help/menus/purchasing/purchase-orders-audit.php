@@ -14,7 +14,7 @@
 return [
     'key'        => 'purchasing.purchase-orders-audit',
     'module'     => 'purchasing',
-    'title_bn'   => 'পি. অর্ডার অডিট লগ',
+    'title_bn'   => 'পারচেজ অর্ডার অডিট লগ',
     'title_en'   => 'Purchase Order Audit Log',
     'icon'       => 'fa-list-check',
     'summary'    => 'এটি পি. অর্ডার-এর অডিট ট্রেইল — কে কখন পিও তৈরি/এডিট/সাবমিট/অ্যাপ্রুভ/রিজেক্ট/সেন্ট/বাতিল করেছে তার লগ। শুধু পড়ার পেজ।',
@@ -40,5 +40,5 @@ return [
 
     'related' => ['purchasing.purchase-orders', 'purchasing.purchase-audit', 'accounting.approvals', 'system.audit'],
 
-    'updated_at' => '2026-08-07',
+    'updated_at' => '2026-08-13',
 ];

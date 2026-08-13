@@ -38,10 +38,10 @@
 return [
     'key'        => 'purchasing.purchase-audit',
     'module'     => 'purchasing',
-    'title_bn'   => 'পারচেজ অডিট চেকলিস্ট',
-    'title_en'   => 'Purchase Audit Checklist',
+    'title_bn'   => 'পারচেজ অডিট চেকলিস্ট — স্বাস্থ্য পরীক্ষা',
+    'title_en'   => 'Purchase Audit Checklist — Health Checks',
     'icon'       => 'fa-clipboard-list',
-    'summary'    => 'পুরো ক্রয় সাইকেলের (পিও/রিসিভ/রিটার্ন) ডেটা ইন্টিগ্রিটি চেক — ১২টি সেকশনে pass/warn/fail ব্যাজ। স্টক নেগেটিভ, মিসিং GL জার্নাল, ওভার-রিসিভ, Damage-এ স্টক মুভমেন্ট — এসব ব্যতিক্রম এক জায়গায় দেখা যায়। শুধু পড়ার পেজ।',
+    'summary'    => 'পুরো ক্রয় সাইকেলের (পিও/রিসিভ/রিটার্ন) ডেটা ইন্টিগ্রিটি চেক — ১২টি সেকশনে pass/warn/fail ব্যাজ। নেগেটিভ স্টক, মিসিং GL জার্নাল, ওভার-রিসিভ, Damage-এ ভুল স্টক মুভমেন্ট — এসব ব্যতিক্রম এক জায়গায় দেখা যায়। ৩টি ডিটেইল টেবিল: নেগেটিভ স্টক, মিসিং GRN জার্নাল, মিসিং রিটার্ন জার্নাল। শুধু পড়ার পেজ — কোনো লেনদেন বদলায় না।',
 
     'for_roles'  => ['admin', 'superadmin', 'manager', 'accountant'],
 
@@ -72,5 +72,5 @@ return [
 
     // No diagram here — this is a consolidated audit dashboard, not a workflow step.
 
-    'updated_at' => '2026-08-07',
+    'updated_at' => '2026-08-13',
 ];

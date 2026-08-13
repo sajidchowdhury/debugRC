@@ -38,10 +38,10 @@
 return [
     'key'        => 'purchasing.purchase-returns',
     'module'     => 'purchasing',
-    'title_bn'   => 'পি. রিটার্ন',
-    'title_en'   => 'P. Return',
+    'title_bn'   => 'পারচেজ রিটার্ন — সাপ্লায়ারকে মাল ফেরত',
+    'title_en'   => 'Purchase Returns — Sending Goods Back',
     'icon'       => 'fa-rotate-left',
-    'summary'    => 'সাপ্লায়ারকে মাল ফেরত দিলে এখানে রিটার্ন হয়। কনফার্ম করলে স্টক কমে (Good মাল), সাপ্লায়ার পেয়েবল কমে (ডেবিট নোট), GL-এ ডাবল-এন্ট্রি পড়ে। Damage মালে স্টক কমে না — শুধু পেয়েবল কমে।',
+    'summary'    => 'সাপ্লায়ারকে মাল ফেরত দিলে এখানে রিটার্ন হয় — ড্যামেজ, ভুল বা বাড়তি মাল সাপ্লায়ারের কাছে ফেরে যায়। কনফার্ম করলে Good মাল স্টক থেকে কমে (original GRN rate-এ), Damage মাল স্টক ছুঁয়ে না। সাপ্লায়ার পেয়েবল কমে (ডেবিট নোট), GL-এ Dr Payable / Cr Inventory জার্নাল পড়ে। ফেরত সবসময় confirmed GRN-এর বিপরীতে হতে হবে। ফেরত কোয়ান্টিটি received থেকে বেশি দেওয়া যায় না। প্রিন্টযোগ্য স্লিপ সাপ্লায়ারকে দেওয়া হয়।',
 
     'for_roles'  => ['admin', 'superadmin', 'manager', 'warehouse_manager', 'accountant'],
 
@@ -79,5 +79,5 @@ return [
 
     // No diagram here — the procure-to-pay diagram lives on purchase-orders (the start of the cycle).
 
-    'updated_at' => '2026-08-07',
+    'updated_at' => '2026-08-13',
 ];

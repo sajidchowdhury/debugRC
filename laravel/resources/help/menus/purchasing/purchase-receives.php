@@ -35,10 +35,10 @@
 return [
     'key'        => 'purchasing.purchase-receives',
     'module'     => 'purchasing',
-    'title_bn'   => 'পি. রিসিভ (GRN)',
-    'title_en'   => 'P. Receive (GRN)',
+    'title_bn'   => 'পারচেজ রিসিভ (GRN) — মাল গোডাউনে ঢোকার মুহূর্ত',
+    'title_en'   => 'Purchase Receive (GRN) — The Stock-In Moment',
     'icon'       => 'fa-truck-ramp-box',
-    'summary'    => 'সাপ্লায়ারের মাল গোডাউনে ঢুকলে এখানে রিসিভ হয়। ড্রাফট তৈরি করে কনফার্ম করলেই স্টক বাড়ে, সাপ্লায়ার পেয়েবল তৈরি হয়, আর GL-এ ডাবল-এন্ট্রি পড়ে। পিও থেকে বা সরাসরি (ডিরেক্ট) রিসিভ করা যায়।',
+    'summary'    => 'সাপ্লায়ারের মাল গোডাউনে ঢুকলে এখানে রিসিভ হয় — এটিই স্টক বাড়ার আসল মুহূর্ত। ড্রাফট তৈরি করে কনফার্ম করলেই একসাথে ৫টি কাজ হয়: (১) স্টক বাড়ে, avg_cost রিক্যালকুলেট হয়; (২) GL-এ Dr Inventory / Cr Accounts Payable জার্নাল পড়ে; (৩) সাপ্লায়ার লেজারে ক্রেডিট এন্ট্রি — আমরা সাপ্লায়ারকে বেশি দেব; (৪) পিওর received_qty আপডেট হয়; (৫) confirmed_by/at স্ট্যাম্প পড়ে। পিও থেকে বা সরাসরি (ডিরেক্ট) রিসিভ করা যায়। ওভার-রিসিভ গার্ড (G-038) বাড়তি কোয়ান্টিটি আটকায়।',
 
     'for_roles'  => ['admin', 'superadmin', 'manager', 'warehouse_manager', 'accountant'],
 
@@ -76,5 +76,5 @@ return [
 
     // No diagram here — the procure-to-pay diagram lives on purchase-orders (the start of the cycle).
 
-    'updated_at' => '2026-08-07',
+    'updated_at' => '2026-08-13',
 ];

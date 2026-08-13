@@ -14,7 +14,7 @@
 return [
     'key'        => 'purchasing.purchase-returns-audit',
     'module'     => 'purchasing',
-    'title_bn'   => 'পি. রিটার্ন অডিট লগ',
+    'title_bn'   => 'পারচেজ রিটার্ন অডিট লগ',
     'title_en'   => 'Purchase Return Audit Log',
     'icon'       => 'fa-list-check',
     'summary'    => 'এটি পি. রিটার্ন-এর অডিট ট্রেইল — কে কখন সাপ্লায়ারকে মাল ফেরত দিয়েছে/কনফার্ম/বাতিল করেছে তার লগ। শুধু পড়ার পেজ।',
@@ -40,5 +40,5 @@ return [
 
     'related' => ['purchasing.purchase-returns', 'purchasing.purchase-returns-slip', 'purchasing.purchase-audit', 'system.audit'],
 
-    'updated_at' => '2026-08-07',
+    'updated_at' => '2026-08-13',
 ];

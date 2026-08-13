@@ -16,7 +16,7 @@
 return [
     'key'        => 'purchasing.purchase-returns-slip',
     'module'     => 'purchasing',
-    'title_bn'   => 'পি. রিটার্ন স্লিপ (ডেবিট নোট)',
+    'title_bn'   => 'পারচেজ রিটার্ন স্লিপ (ডেবিট নোট)',
     'title_en'   => 'Purchase Return Slip (Debit Note)',
     'icon'       => 'fa-receipt',
     'summary'    => 'এটি পি. রিটার্ন-এর প্রিন্টযোগ্য স্লিপ/ডেবিট নোট — সাপ্লায়ারকে দেখানোর দলিল। নতুন ট্যাবে খোলে, প্রিন্ট বাটন সহ।',
@@ -43,5 +43,5 @@ return [
 
     'related' => ['purchasing.purchase-returns', 'purchasing.purchase-returns-audit', 'accounting.supplier-transactions'],
 
-    'updated_at' => '2026-08-07',
+    'updated_at' => '2026-08-13',
 ];

@@ -14,7 +14,7 @@
 return [
     'key'        => 'purchasing.purchase-receives-audit',
     'module'     => 'purchasing',
-    'title_bn'   => 'পি. রিসিভ অডিট লগ',
+    'title_bn'   => 'পারচেজ রিসিভ অডিট লগ',
     'title_en'   => 'Purchase Receive Audit Log',
     'icon'       => 'fa-list-check',
     'summary'    => 'এটি পি. রিসিভ (GRN)-এর অডিট ট্রেইল — কে কখন মাল রিসিভ/কনফার্ম/বাতিল করেছে তার লগ। শুধু পড়ার পেজ।',
@@ -40,5 +40,5 @@ return [
 
     'related' => ['purchasing.purchase-receives', 'purchasing.purchase-audit', 'system.audit'],
 
-    'updated_at' => '2026-08-07',
+    'updated_at' => '2026-08-13',
 ];
