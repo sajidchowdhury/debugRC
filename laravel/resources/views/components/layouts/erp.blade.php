@@ -143,10 +143,10 @@
         @media (max-width: 991.98px) {
             #sidebar {
                 position: fixed !important;
-                top: 56px;                                /* below sticky top-nav */
+                top: 55px;                                /* below sticky top-nav */
                 left: -280px;                            /* off-screen left */
                 bottom: 0;
-                height: calc(100vh - 56px) !important;
+                height: calc(100vh - 55px) !important;
                 width: 260px;
                 z-index: 1060;
                 transition: left 0.3s ease;
@@ -158,7 +158,7 @@
             }
             #sidebarOverlay {
                 position: fixed;
-                top: 56px;                               /* below top-nav */
+                top: 55px;                               /* below top-nav */
                 left: 0;
                 right: 0;
                 bottom: 0;
@@ -183,10 +183,10 @@
         @media (min-width: 992px) {
             #sidebar {
                 position: fixed !important;
-                top: 56px;                                /* below sticky top-nav */
+                top: 55px;                                /* below sticky top-nav */
                 left: 0;
                 bottom: 0;
-                height: calc(100vh - 56px) !important;
+                height: calc(100vh - 55px) !important;
                 width: 260px;
                 z-index: 40;                             /* below top-nav z-50 */
             }
@@ -427,15 +427,26 @@
     <script src="/assets/js/bootstrep/bootstrap.bundle.min.js"></script>
     <script>
         window.CSRF_TOKEN = '{{ csrf_token() }}';
-        // Toggle the mobile sidebar drawer + overlay backdrop. On desktop
-        // (lg+) the sidebar is always visible in normal flow — this is a
-        // no-op. On mobile (<lg) the sidebar is a fixed slide-in drawer.
+        // Toggle the sidebar: on mobile (<992) it slides in as a drawer with overlay;
+        // on desktop (≥992) it collapses/expands.
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
+            const mainContent = document.getElementById('mainContent');
             if (!sidebar) return;
-            sidebar.classList.toggle('active');
-            if (overlay) overlay.classList.toggle('active');
+
+            if (window.innerWidth < 992) {
+                // Mobile: toggle drawer open/close
+                const isOpen = sidebar.classList.toggle('active');
+                if (overlay) overlay.classList.toggle('active', isOpen);
+                // Prevent body scroll when drawer is open
+                document.body.style.overflow = isOpen ? 'hidden' : '';
+            } else {
+                // Desktop: toggle collapsed state
+                const collapsed = sidebar.classList.toggle('collapsed');
+                if (mainContent) mainContent.classList.toggle('sidebar-collapsed', collapsed);
+                try { localStorage.setItem('rcerp_sidebar_collapsed', collapsed); } catch(e) {}
+            }
         }
         // Close the drawer when the overlay backdrop is clicked.
         document.addEventListener('DOMContentLoaded', function() {
@@ -445,6 +456,7 @@
                     const sidebar = document.getElementById('sidebar');
                     if (sidebar) sidebar.classList.remove('active');
                     overlay.classList.remove('active');
+                    document.body.style.overflow = '';
                 });
             }
             // Close the drawer on ESC.
@@ -455,6 +467,7 @@
                         sidebar.classList.remove('active');
                         const ov = document.getElementById('sidebarOverlay');
                         if (ov) ov.classList.remove('active');
+                        document.body.style.overflow = '';
                     }
                 }
             });

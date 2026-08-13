@@ -54,7 +54,7 @@
             border-right: 1px solid rgba(139,92,246,0.15);
             width: 264px;
             position: fixed !important;
-            top: 52px;
+            top: 55px;
             left: 0;
             z-index: 40 !important;
             overflow-y: auto;
@@ -143,18 +143,18 @@
 
         /* ===== MOBILE DRAWER ===== */
         @media (max-width: 991.98px) {
-            #sidebar { position: fixed !important; top: 52px; left: -280px; bottom: 0; height: calc(100vh - 52px) !important; width: 264px; z-index: 1060; box-shadow: 0 0 60px rgba(0,0,0,0.5); }
+            #sidebar { position: fixed !important; top: 55px; left: -280px; bottom: 0; height: calc(100vh - 55px) !important; width: 264px; z-index: 1060; box-shadow: 0 0 60px rgba(0,0,0,0.5); transition: left 0.3s cubic-bezier(0.4,0,0.2,1); }
             #sidebar.active { left: 0; }
             #sidebar.collapsed { width: 264px !important; }
             #sidebar.collapsed .logo-text, #sidebar.collapsed .nav-link span, #sidebar.collapsed .sidebar-toggle .fa-chevron-down, #sidebar.collapsed .submenu { display: initial !important; }
-            #sidebarOverlay { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,0.6); backdrop-filter: blur(4px); z-index: 1055; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+            #sidebarOverlay { position: fixed; top: 55px; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,0.6); backdrop-filter: blur(4px); z-index: 1055; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
             #sidebarOverlay.active { opacity: 1; pointer-events: auto; }
             #mainContent { margin-left: 0 !important; width: 100% !important; }
         }
 
         /* ===== DESKTOP ===== */
         @media (min-width: 992px) {
-            #sidebar { height: calc(100vh - 52px) !important; }
+            #sidebar { height: calc(100vh - 55px) !important; }
             #mainContent { margin-left: 264px !important; width: calc(100% - 264px) !important; max-width: none !important; transition: margin-left 0.3s cubic-bezier(0.4,0,0.2,1), width 0.3s cubic-bezier(0.4,0,0.2,1); }
             #mainContent.sidebar-collapsed { margin-left: 64px !important; width: calc(100% - 64px) !important; }
         }
@@ -389,13 +389,26 @@
     <script src="/assets/js/bootstrep/bootstrap.bundle.min.js"></script>
     <script>
         window.CSRF_TOKEN = '{{ csrf_token() }}';
-        // Toggle the mobile sidebar drawer + overlay backdrop.
+        // Toggle the sidebar: on mobile (<992) it slides in as a drawer with overlay;
+        // on desktop (≥992) it collapses/expands.
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
+            const mainContent = document.getElementById('mainContent');
             if (!sidebar) return;
-            sidebar.classList.toggle('active');
-            if (overlay) overlay.classList.toggle('active');
+
+            if (window.innerWidth < 992) {
+                // Mobile: toggle drawer open/close
+                const isOpen = sidebar.classList.toggle('active');
+                if (overlay) overlay.classList.toggle('active', isOpen);
+                // Prevent body scroll when drawer is open
+                document.body.style.overflow = isOpen ? 'hidden' : '';
+            } else {
+                // Desktop: toggle collapsed state
+                const collapsed = sidebar.classList.toggle('collapsed');
+                if (mainContent) mainContent.classList.toggle('sidebar-collapsed', collapsed);
+                try { localStorage.setItem('rcerp_sidebar_collapsed', collapsed); } catch(e) {}
+            }
         }
 
         // ── Sidebar collapse/expand (desktop) ──
@@ -442,6 +455,7 @@
                     const sidebar = document.getElementById('sidebar');
                     if (sidebar) sidebar.classList.remove('active');
                     overlay.classList.remove('active');
+                    document.body.style.overflow = '';
                 });
             }
             // Close the drawer on ESC.
@@ -452,6 +466,7 @@
                         sidebar.classList.remove('active');
                         const ov = document.getElementById('sidebarOverlay');
                         if (ov) ov.classList.remove('active');
+                        document.body.style.overflow = '';
                     }
                 }
             });
@@ -511,6 +526,7 @@
                         var overlay = document.getElementById('sidebarOverlay');
                         if (sidebar) sidebar.classList.remove('active');
                         if (overlay) overlay.classList.remove('active');
+                        document.body.style.overflow = '';
                     }
                 });
             });
