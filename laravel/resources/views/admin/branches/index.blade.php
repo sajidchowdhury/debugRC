@@ -9,22 +9,13 @@
 <div class="container-fluid py-2">
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#0891b2,#06b6d4);">
-        <div class="d-flex align-items-start gap-2">
-            <div>
-                <h1 class="h4 mb-1"><i class="fas fa-sitemap me-2"></i>{{ $showDeleted ? 'Inactive branches' : 'Branch network' }}</h1>
-                <p class="mb-0 small opacity-75">
-                    {{ $showDeleted
-                        ? 'Restore locations when ready to operate again.'
-                        : 'Organize locations, warehouses, and teams across your Remote Center ERP footprint.' }}
-                </p>
-            </div>
-            <button type="button"
-                    class="btn btn-sm rounded-circle bg-white bg-opacity-20 text-white border-white border-opacity-50 flex-shrink-0 mt-1"
-                    data-page-help="master-data.branches"
-                    title="ব্র্যাঞ্চ সাহায্য দেখুন"
-                    aria-label="ব্র্যাঞ্চ সাহায্য">
-                <i class="fas fa-question fa-xs"></i>
-            </button>
+        <div>
+            <h1 class="h4 mb-1"><i class="fas fa-sitemap me-2"></i>{{ $showDeleted ? 'Inactive branches' : 'Branch network' }}</h1>
+            <p class="mb-0 small opacity-75">
+                {{ $showDeleted
+                    ? 'Restore locations when ready to operate again.'
+                    : 'Organize locations, warehouses, and teams across your Remote Center ERP footprint.' }}
+            </p>
         </div>
         <div class="d-flex gap-2 flex-wrap">
             @if ($showDeleted)

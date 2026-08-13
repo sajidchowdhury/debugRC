@@ -15,7 +15,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Services\Help\HelpService;
 
-$menuKey = null;
+$pageMenuKey = null;
 $helpService = app(HelpService::class);
 
 // Cache-bust version for the help assets (mirrors the pattern in layouts/admin.blade.php).
@@ -29,7 +29,7 @@ $helpJsVer  = is_file($helpJsPath) ? filemtime($helpJsPath) : '1';
     {{-- Resolve the current route's menu key (Phase 3 adds controller@action fallback) --}}
     @php
         $currentRoute = Route::currentRouteName();
-        $menuKey = $helpService->menuKeyForRoute($currentRoute);
+        $pageMenuKey = $helpService->menuKeyForRoute($currentRoute);
 
         // §9.1 in-guide search index: every module + every menu_key (with a
         // derived human label) so the module-sheet search box can filter
@@ -62,7 +62,7 @@ $helpJsVer  = is_file($helpJsPath) ? filemtime($helpJsPath) : '1';
     @endphp
 
     {{-- Door 1: floating help button --}}
-    <x-help.help-button :menu-key="$menuKey" />
+    <x-help.help-button :menu-key="$pageMenuKey" />
 
     {{-- Door 2: fixed footer pill --}}
     <x-help.guide-footer />
@@ -87,7 +87,7 @@ $helpJsVer  = is_file($helpJsPath) ? filemtime($helpJsPath) : '1';
                 menu: @json(route('help.menu', ['key' => '__KEY__'])),
                 module: @json(route('help.module', ['key' => '__KEY__'])),
             },
-            currentMenuKey: @json($menuKey),
+            currentMenuKey: @json($pageMenuKey),
             csrfToken: @json(csrf_token()),
             // Module key -> Bangla title map (Phase 5). Lets help.js render the
             // breadcrumb ("মডিউল: সেলস › সেলস ইনভয়েস") without an extra round-trip.
