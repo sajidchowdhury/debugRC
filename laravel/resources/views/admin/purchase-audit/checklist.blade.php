@@ -115,7 +115,7 @@
                             <tr>
                                 <td>{{ $row['warehouse_name'] ?? '' }}</td>
                                 <td>{{ $row['product_name'] ?? '' }}</td>
-                                <td class="text-end">{{ number_format((float) ($row['physical_qty'] ?? 0), 2) }}</td>
+                                <td class="text-end">{{ number_format((float) ($row['qty'] ?? 0), 2) }}</td>
                                 <td class="text-end">{{ number_format((float) ($row['avg_cost'] ?? 0), 2) }}</td>
                             </tr>
                         @endforeach

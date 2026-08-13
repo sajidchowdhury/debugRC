@@ -4212,7 +4212,7 @@ DELETE FROM "bank_ledger_mappings";
 
 -- Table: menus (52 rows)
 DELETE FROM "menus";
-INSERT INTO "menus" OVERRIDING SYSTEM VALUE ("id", "parent_id", "menu_label", "controller", "action", "icon", "sort_order", "is_active", "created_at", "updated_at") VALUES (1, 0, 'Dashboard', 'dashboard', 'index', 'fa fa-dashboard', 1, TRUE, '2026-07-30 11:06:03', '2026-07-30 11:06:03');
+INSERT INTO "menus" OVERRIDING SYSTEM VALUE ("id", "parent_id", "menu_label", "controller", "action", "icon", "sort_order", "is_active", "created_at", "updated_at") VALUES (1, 0, 'Overview', 'dashboard', 'index', 'fa fa-home', 1, TRUE, '2026-07-30 11:06:03', '2026-07-30 11:06:03');
 INSERT INTO "menus" OVERRIDING SYSTEM VALUE ("id", "parent_id", "menu_label", "controller", "action", "icon", "sort_order", "is_active", "created_at", "updated_at") VALUES (2, 0, 'Administration', NULL, NULL, 'fa fa-cogs', 2, TRUE, '2026-07-30 11:06:03', '2026-07-30 11:06:03');
 INSERT INTO "menus" OVERRIDING SYSTEM VALUE ("id", "parent_id", "menu_label", "controller", "action", "icon", "sort_order", "is_active", "created_at", "updated_at") VALUES (3, 0, 'Sales', NULL, NULL, 'fa fa-shopping-cart', 3, TRUE, '2026-07-30 11:06:03', '2026-07-30 11:06:03');
 INSERT INTO "menus" OVERRIDING SYSTEM VALUE ("id", "parent_id", "menu_label", "controller", "action", "icon", "sort_order", "is_active", "created_at", "updated_at") VALUES (4, 0, 'Purchase', NULL, NULL, 'fa fa-cart-plus', 4, TRUE, '2026-07-30 11:06:03', '2026-07-30 11:06:03');

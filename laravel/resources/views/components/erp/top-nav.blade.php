@@ -67,6 +67,13 @@
                     <i class="fas fa-bars"></i>
                 </button>
                 <div class="bg-gradient-to-r from-amber-500 to-orange-500 rounded-lg px-3 py-1.5 text-white font-bold text-sm shadow">RC ERP</div>
+                {{-- Dashboard button — links to user performance dashboard (separate from sidebar "Overview") --}}
+                <a href="{{ route('dashboard') }}"
+                   class="inline-flex items-center gap-1.5 bg-white/80 border border-amber-300 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-50 hover:border-amber-400 transition-colors shadow-sm"
+                   title="Performance Dashboard">
+                    <i class="fas fa-tachometer-alt" style="font-size:0.75rem;"></i>
+                    Dashboard
+                </a>
                 <span class="text-xs text-amber-700 font-medium hidden sm:inline">আর সি বণিক — Sales</span>
             </div>
             <div class="flex items-center gap-2 flex-wrap">

@@ -305,7 +305,7 @@ class PurchaseAuditService
     {
         $neg = $this->scalarCount("
             SELECT COUNT(*) AS c FROM warehouse_stock ws
-            WHERE ws.physical_qty < -0.0001
+            WHERE ws.qty < -0.0001
             " . $this->branchWarehouseFilter('ws.warehouse_id') . "
         ");
 
@@ -332,11 +332,11 @@ class PurchaseAuditService
             'title' => 'Stock — single source of truth',
             'icon'  => 'fa-boxes',
             'items' => [
-                $this->item('stock_ssot', 'Read: warehouse_stock (physical_qty + avg_cost)', 'On-hand quantity and moving-average cost live only in warehouse_stock. Same SSOT as sales.', 'info', 'Do not use GRN line qty as on-hand stock.'),
+                $this->item('stock_ssot', 'Read: warehouse_stock (qty + avg_cost)', 'On-hand quantity and moving-average cost live only in warehouse_stock. Same SSOT as sales.', 'info', 'Do not use GRN line qty as on-hand stock.'),
                 $this->item('stock_grn_returnable', 'GRN return_qty is not on-hand stock', 'return_qty = received − returned_to_supplier on that GRN line. Caps supplier return; separate from warehouse_stock.', 'info', 'Return qty ≤ returnable AND ≤ warehouse available (Good).'),
                 $this->item('stock_writer', 'Write: StockService only', 'PurchaseReceiveService and PurchaseReturnService use StockService::applyTransaction() — never direct UPDATE warehouse_stock.', 'info', 'Reference types: purchase_receive, purchase_return.'),
                 $this->item('stock_moves_logged', 'Purchase stock movements logged (last 12 mo)', 'Confirms stock_transactions rows exist for purchase flows.', $recentPurchaseMoves > 0 ? 'pass' : 'warn', $recentPurchaseMoves > 0 ? "{$recentPurchaseMoves} movement(s)" : 'No purchase stock movements in period'),
-                $this->item('stock_negative', 'No negative warehouse balances', 'warehouse_stock.physical_qty must not go below zero.', $neg === 0 ? 'pass' : 'fail', $neg === 0 ? 'OK' : "{$neg} row(s) below zero — see table below"),
+                $this->item('stock_negative', 'No negative warehouse balances', 'warehouse_stock.qty must not go below zero.', $neg === 0 ? 'pass' : 'fail', $neg === 0 ? 'OK' : "{$neg} row(s) below zero — see table below"),
                 $this->item('stock_orphan', 'Movements linked to warehouse_stock', 'Every purchase stock_transaction should have a matching warehouse_stock row.', $orphanMovements === 0 ? 'pass' : 'warn', $orphanMovements === 0 ? 'OK' : "{$orphanMovements} movement(s) without warehouse_stock"),
             ],
         ];
@@ -650,7 +650,7 @@ class PurchaseAuditService
             return DB::table('warehouse_stock as ws')
                 ->leftJoin('warehouses as w', 'w.id', '=', 'ws.warehouse_id')
                 ->leftJoin('products as p', 'p.id', '=', 'ws.product_id')
-                ->where('ws.physical_qty', '<', -0.0001)
+                ->where('ws.qty', '<', -0.0001)
                 ->when($this->branchId, function ($q, $bid) {
                     $q->whereExists(function ($sub) use ($bid) {
                         $sub->select(DB::raw(1))
@@ -662,9 +662,9 @@ class PurchaseAuditService
                 ->select(
                     'ws.warehouse_id', 'ws.product_id',
                     'w.warehouse_name', 'p.product_name',
-                    'ws.physical_qty', 'ws.avg_cost'
+                    'ws.qty', 'ws.avg_cost'
                 )
-                ->orderBy('ws.physical_qty', 'asc')
+                ->orderBy('ws.qty', 'asc')
                 ->limit($limit)
                 ->get()
                 ->map(fn($r) => (array) $r)
