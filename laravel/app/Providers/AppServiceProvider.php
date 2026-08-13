@@ -115,6 +115,20 @@ class AppServiceProvider extends ServiceProvider
             return $user->isAdmin(); // true for admin + superadmin (User::isAdmin() L168-171)
         });
 
+        // Superadmin bypasses ALL policy checks (mirrors EnsureRole
+        // middleware which already lets superadmin through on every route).
+        // Without this Gate::before(), every Policy::viewAny()/view()/etc.
+        // that checks hasRole('admin', 'manager', ...) blocks superadmin
+        // because hasRole() uses strict in_array — 'superadmin' is never
+        // in those explicit role lists. This single addition fixes the
+        // 403 "This action is unauthorized" for superadmin on every
+        // $this->authorize() call in every controller.
+        \Illuminate\Support\Facades\Gate::before(function (\App\Models\User $user, string $ability) {
+            if ($user->isSuperadmin()) {
+                return true;
+            }
+        });
+
         // Phase 6: Register model Policies. Laravel auto-discovers these
         // (App\Models\SalesInvoice → App\Policies\SalesInvoicePolicy), but
         // explicit registration makes the intent obvious + survives any
