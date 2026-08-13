@@ -39,142 +39,124 @@
          preview / x-layouts.erp design). Ported from components/layouts/erp.blade.php
          so EVERY page that extends layouts.admin gets the same premium sidebar. --}}
     <style>
-        .sidebar-toggle[aria-expanded="true"] .fa-chevron-down {
-            transform: rotate(180deg);
-            transition: transform 0.2s ease;
-        }
-        .sidebar-toggle .fa-chevron-down {
-            transition: transform 0.2s ease;
-        }
+        /* ── Chevron rotation ── */
+        .sidebar-toggle[aria-expanded="true"] .fa-chevron-down { transform: rotate(180deg); }
+        .sidebar-toggle .fa-chevron-down { transition: transform 0.25s ease; }
 
-        /* ===== MODERN SIDEBAR (dark slate, matching the design preview) ===== */
+        /* ── Animations ── */
+        @keyframes sidebarShimmer { 0%{background-position:-200% center}100%{background-position:200% center} }
+        @keyframes activeGlow { 0%,100%{box-shadow:0 0 8px rgba(245,158,11,0.12)}50%{box-shadow:0 0 18px rgba(245,158,11,0.28)} }
+
+        /* ===== SIDEBAR — Premium dark-glass with purple gradient ===== */
         #sidebar {
-            background: #0f172a !important;            /* slate-900 */
-            color: #cbd5e1;                              /* slate-300 */
-            border-right: 1px solid #1e293b;             /* slate-800 */
-            width: 260px;
-            position: fixed !important;                  /* win over .sidebar in custom.css */
-            top: 56px;                                   /* below sticky top-nav (always) */
+            background: linear-gradient(180deg, #0f172a 0%, #1e1b4b 40%, #0f172a 100%) !important;
+            color: #cbd5e1;
+            border-right: 1px solid rgba(139,92,246,0.15);
+            width: 264px;
+            position: fixed !important;
+            top: 52px;
             left: 0;
-            z-index: 40 !important;                      /* below top-nav z-50, above content */
+            z-index: 40 !important;
             overflow-y: auto;
+            overflow-x: hidden;
+            transition: width 0.3s cubic-bezier(0.4,0,0.2,1);
+            scrollbar-width: thin;
+            scrollbar-color: rgba(139,92,246,0.3) transparent;
         }
+        #sidebar::-webkit-scrollbar { width: 4px; }
+        #sidebar::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 4px; }
+
+        /* ── Header ── */
         #sidebar .sidebar-header {
-            padding: 14px 18px;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
-            margin-bottom: 8px;
+            padding: 14px 14px 10px;
+            border-bottom: 1px solid rgba(139,92,246,0.12);
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
         #sidebar .sidebar-header .logo {
-            color: #f8fafc;                              /* slate-50 */
-            font-size: 1.05rem;
-            font-weight: 700;
-            letter-spacing: 0.01em;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
+            background: linear-gradient(90deg,#f59e0b,#f97316,#ef4444,#f97316,#f59e0b);
+            background-size: 200% auto;
+            animation: sidebarShimmer 4s linear infinite;
+            -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 1.1rem; font-weight: 800; letter-spacing: 0.02em;
+            display: inline-flex; align-items: center; gap: 8px;
+            white-space: nowrap; overflow: hidden;
         }
-        #sidebar .sidebar-header .logo i {
-            color: #f59e0b;                              /* amber-500 */
-            font-size: 1.1rem;
+        #sidebar .sidebar-header .logo i { -webkit-text-fill-color: #f59e0b; font-size: 1rem; }
+
+        /* ── Collapse toggle ── */
+        #sidebarCollapseBtn {
+            display: flex; align-items: center; justify-content: center;
+            width: 26px; height: 26px; border-radius: 7px;
+            border: 1px solid rgba(139,92,246,0.2); background: rgba(139,92,246,0.08);
+            color: #a78bfa; cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
         }
+        #sidebarCollapseBtn:hover { background: rgba(139,92,246,0.2); color: #c4b5fd; }
+        #sidebarCollapseBtn i { transition: transform 0.3s ease; font-size: 0.65rem; }
+
+        /* ── Nav links ── */
         #sidebar .nav-link {
-            color: #94a3b8;                              /* slate-400 */
-            border-radius: 8px;
-            padding: 8px 14px;
-            margin: 2px 8px;
-            font-size: 0.8125rem;
-            font-weight: 500;
-            transition: background 0.15s ease, color 0.15s ease;
-            border-left: 3px solid transparent;
+            color: #94a3b8; border-radius: 10px; padding: 9px 14px; margin: 2px 8px;
+            font-size: 0.8rem; font-weight: 500; transition: all 0.2s ease;
+            border-left: 3px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        #sidebar .nav-link:hover {
-            background: rgba(255,255,255,0.06);
-            color: #f1f5f9;                              /* slate-100 */
-        }
+        #sidebar .nav-link:hover { background: rgba(255,255,255,0.05); color: #e2e8f0; transform: translateX(2px); }
         #sidebar .nav-link.active {
-            background: rgba(245,158,11,0.10) !important; /* amber tint */
-            color: #fbbf24 !important;                   /* amber-400 */
-            font-weight: 600;
-            border-left-color: #f59e0b;                  /* amber-500 */
+            background: linear-gradient(90deg,rgba(245,158,11,0.15),rgba(249,115,22,0.08)) !important;
+            color: #fbbf24 !important; font-weight: 600; border-left-color: #f59e0b;
+            animation: activeGlow 3s ease-in-out infinite;
         }
-        #sidebar .nav-link.active i,
-        #sidebar .nav-link.active .fas {
-            color: #fbbf24 !important;                   /* amber-400 */
-        }
-        #sidebar .nav-link i {
-            width: 18px;
-            text-align: center;
-            font-size: 0.85rem;
-        }
-        #sidebar .submenu {
-            border-left: 1px solid rgba(255,255,255,0.06);
-            margin-left: 22px;
-        }
-        #sidebar .submenu .nav-link {
-            font-size: 0.78rem;
-            padding-left: 18px;
-        }
-        /* Submenu show/hide via .is-open (no Bootstrap .collapse) */
-        #sidebar .submenu:not(.is-open) {
-            display: none;
-        }
-        #sidebar .submenu.is-open {
-            display: block;
-        }
+        #sidebar .nav-link.active i, #sidebar .nav-link.active .fas { color: #fbbf24 !important; }
+        #sidebar .nav-link i { width: 20px; text-align: center; font-size: 0.85rem; }
 
-        /* ===== MOBILE DRAWER (< lg / 991.98px) ===== */
+        /* ── Color-coded section icons ── */
+        #sidebar .nav-item[data-section="overview"] > .nav-link i { color: #10b981; }
+        #sidebar .nav-item[data-section="admin"] > .nav-link i { color: #8b5cf6; }
+        #sidebar .nav-item[data-section="sales"] > .nav-link i { color: #f59e0b; }
+        #sidebar .nav-item[data-section="purchase"] > .nav-link i { color: #06b6d4; }
+        #sidebar .nav-item[data-section="inventory"] > .nav-link i { color: #22c55e; }
+        #sidebar .nav-item[data-section="finance"] > .nav-link i { color: #ec4899; }
+        #sidebar .nav-item[data-section="accounting"] > .nav-link i { color: #6366f1; }
+        #sidebar .nav-item[data-section="reports"] > .nav-link i { color: #f97316; }
+        #sidebar .nav-item[data-section="system"] > .nav-link i { color: #64748b; }
+
+        /* ── Submenu ── */
+        #sidebar .submenu { border-left: 2px solid rgba(139,92,246,0.1); margin-left: 24px; overflow: hidden; transition: max-height 0.35s ease, opacity 0.25s ease; }
+        #sidebar .submenu:not(.is-open) { max-height: 0 !important; opacity: 0; pointer-events: none; }
+        #sidebar .submenu.is-open { max-height: 2000px; opacity: 1; pointer-events: auto; }
+        #sidebar .submenu .nav-link { font-size: 0.75rem; padding: 6px 14px 6px 16px; }
+
+        /* ── Collapsed state ── */
+        #sidebar.collapsed { width: 64px !important; }
+        #sidebar.collapsed .logo-text,
+        #sidebar.collapsed .nav-link span,
+        #sidebar.collapsed .sidebar-toggle .fa-chevron-down,
+        #sidebar.collapsed .submenu { display: none !important; }
+        #sidebar.collapsed .nav-link { justify-content: center; padding: 10px; margin: 3px 6px; border-left-width: 0; }
+        #sidebar.collapsed .nav-link i { width: auto; font-size: 1rem; }
+        #sidebar.collapsed .sidebar-header { justify-content: center; padding: 14px 8px 10px; }
+        #sidebar.collapsed .sidebar-header .logo i { font-size: 1.2rem; }
+        #sidebar.collapsed #sidebarCollapseBtn i { transform: rotate(180deg); }
+
+        /* ===== MOBILE DRAWER ===== */
         @media (max-width: 991.98px) {
-            #sidebar {
-                position: fixed !important;
-                top: 56px;                                /* below sticky top-nav */
-                left: -280px;                            /* off-screen left */
-                bottom: 0;
-                height: calc(100vh - 56px) !important;
-                width: 260px;
-                z-index: 1060;
-                transition: left 0.3s ease;
-                overflow-y: auto;
-                box-shadow: 0 0 40px rgba(0,0,0,0.3);
-            }
-            #sidebar.active {
-                left: 0;                                 /* slide in */
-            }
-            #sidebarOverlay {
-                position: fixed;
-                top: 56px;                               /* below top-nav */
-                left: 0;
-                right: 0;
-                bottom: 0;
-                background: rgba(15,23,42,0.55);        /* slate-900/55 */
-                z-index: 1055;
-                opacity: 0;
-                pointer-events: none;
-                transition: opacity 0.3s ease;
-            }
-            #sidebarOverlay.active {
-                opacity: 1;
-                pointer-events: auto;
-            }
-            /* Main content full-width on mobile (sidebar is a drawer) */
-            #mainContent {
-                margin-left: 0 !important;
-                width: 100% !important;
-            }
+            #sidebar { position: fixed !important; top: 52px; left: -280px; bottom: 0; height: calc(100vh - 52px) !important; width: 264px; z-index: 1060; box-shadow: 0 0 60px rgba(0,0,0,0.5); }
+            #sidebar.active { left: 0; }
+            #sidebar.collapsed { width: 264px !important; }
+            #sidebar.collapsed .logo-text, #sidebar.collapsed .nav-link span, #sidebar.collapsed .sidebar-toggle .fa-chevron-down, #sidebar.collapsed .submenu { display: initial !important; }
+            #sidebarOverlay { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,0.6); backdrop-filter: blur(4px); z-index: 1055; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+            #sidebarOverlay.active { opacity: 1; pointer-events: auto; }
+            #mainContent { margin-left: 0 !important; width: 100% !important; }
         }
 
-        /* ===== DESKTOP (>= lg / 992px) — fixed sidebar + offset main ===== */
+        /* ===== DESKTOP ===== */
         @media (min-width: 992px) {
-            #sidebar {
-                height: calc(100vh - 56px) !important;
-            }
-            /* Offset main content to account for the fixed 260px sidebar.
-               Overrides Bootstrap col-lg-10 + ms-auto which misaligns with
-               a fixed-width sidebar. */
-            #mainContent {
-                margin-left: 260px !important;
-                width: calc(100% - 260px) !important;
-                max-width: none !important;
-            }
+            #sidebar { height: calc(100vh - 52px) !important; }
+            #mainContent { margin-left: 264px !important; width: calc(100% - 264px) !important; max-width: none !important; transition: margin-left 0.3s cubic-bezier(0.4,0,0.2,1), width 0.3s cubic-bezier(0.4,0,0.2,1); }
+            #mainContent.sidebar-collapsed { margin-left: 64px !important; width: calc(100% - 64px) !important; }
         }
     </style>
 
@@ -243,11 +225,21 @@
                         <i class="fas fa-store"></i>
                         <span class="logo-text">RC ERP</span>
                     </span>
+                    <button type="button" id="sidebarCollapseBtn" title="Collapse sidebar" aria-label="Toggle sidebar">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
                 </div>
                 <ul class="nav flex-column" id="sidebarMenu">
                     @php
                         $menuTree = app(\App\Services\MenuService::class)->getUserMenuTree(auth()->user());
                         $currentUri = '/' . request()->path();
+                        $sectionMap = [
+                            'Overview' => 'overview', 'Administration' => 'admin',
+                            'Sales' => 'sales', 'Purchase' => 'purchase',
+                            'Inventory' => 'inventory', 'Finance' => 'finance',
+                            'Accounting' => 'accounting', 'Reports' => 'reports',
+                            'System' => 'system',
+                        ];
                     @endphp
 
                     @foreach ($menuTree as $mainMenu)
@@ -268,7 +260,7 @@
 
                         @if ($hasChildren)
                             {{-- Dropdown parent --}}
-                            <li class="nav-item">
+                            <li class="nav-item" data-section="{{ $sectionMap[$mainMenu['menu_name']] ?? 'system' }}">
                                 <a href="#" class="nav-link d-flex align-items-center sidebar-toggle {{ $isActive ? 'active' : '' }}"
                                    data-target="#menu-{{ $mainMenu['id'] }}" aria-expanded="{{ $isActive ? 'true' : 'false' }}">
                                     <i class="{{ $mainMenu['icon'] }}"></i>
@@ -327,7 +319,7 @@
                                 $topLeafActive = !empty($topLeafPath) && $topLeafPath !== '/' && $topLeafPath !== '#' &&
                                     str_starts_with($currentUri, $topLeafPath);
                             @endphp
-                            <li class="nav-item">
+                            <li class="nav-item" data-section="{{ $sectionMap[$mainMenu['menu_name']] ?? 'system' }}">
                                 <a href="{{ $mainMenu['url'] }}" class="nav-link {{ $topLeafActive ? 'active' : '' }}">
                                     <i class="{{ $mainMenu['icon'] }}"></i>
                                     <span class="ms-2">{{ $mainMenu['menu_name'] }}</span>
@@ -338,13 +330,13 @@
 
                     {{-- System menus (always visible to admin/superadmin) --}}
                     @can('manage-system-policy')
-                    <li class="nav-item">
+                    <li class="nav-item" data-section="system">
                         <a href="{{ route('admin.compliance.index') }}" class="nav-link {{ request()->routeIs('admin.compliance.*') ? 'active' : '' }}">
                             <i class="fas fa-shield-halved"></i> <span class="ms-2">Compliance</span>
                         </a>
                     </li>
                     @endcan
-                    <li class="nav-item">
+                    <li class="nav-item" data-section="system">
                         <a href="{{ route('admin.archive.index') }}" class="nav-link {{ request()->routeIs('admin.archive.*') ? 'active' : '' }}">
                             <i class="fas fa-archive"></i> <span class="ms-2">Archive</span>
                         </a>
@@ -397,9 +389,7 @@
     <script src="/assets/js/bootstrep/bootstrap.bundle.min.js"></script>
     <script>
         window.CSRF_TOKEN = '{{ csrf_token() }}';
-        // Toggle the mobile sidebar drawer + overlay backdrop. On desktop
-        // (lg+) the sidebar is always visible in normal flow — this is a
-        // no-op. On mobile (<lg) the sidebar is a fixed slide-in drawer.
+        // Toggle the mobile sidebar drawer + overlay backdrop.
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
@@ -407,6 +397,43 @@
             sidebar.classList.toggle('active');
             if (overlay) overlay.classList.toggle('active');
         }
+
+        // ── Sidebar collapse/expand (desktop) ──
+        (function() {
+            var COLLAPSE_KEY = 'rcerp_sidebar_collapsed';
+            var sidebar = document.getElementById('sidebar');
+            var mainContent = document.getElementById('mainContent');
+            var collapseBtn = document.getElementById('sidebarCollapseBtn');
+
+            // Restore saved state
+            var isCollapsed = false;
+            try { isCollapsed = localStorage.getItem(COLLAPSE_KEY) === 'true'; } catch(e) {}
+            if (isCollapsed && sidebar && window.innerWidth >= 992) {
+                sidebar.classList.add('collapsed');
+                if (mainContent) mainContent.classList.add('sidebar-collapsed');
+            }
+
+            // Collapse toggle button click
+            if (collapseBtn) {
+                collapseBtn.addEventListener('click', function() {
+                    if (window.innerWidth < 992) return; // mobile uses drawer, not collapse
+                    var collapsed = sidebar.classList.toggle('collapsed');
+                    if (mainContent) mainContent.classList.toggle('sidebar-collapsed', collapsed);
+                    try { localStorage.setItem(COLLAPSE_KEY, collapsed); } catch(e) {}
+                });
+            }
+
+            // On window resize, if going from mobile to desktop, remove collapsed if drawer was open
+            window.addEventListener('resize', function() {
+                if (window.innerWidth >= 992 && sidebar) {
+                    // Restore collapse state on desktop
+                    var savedCollapsed = false;
+                    try { savedCollapsed = localStorage.getItem(COLLAPSE_KEY) === 'true'; } catch(e) {}
+                    sidebar.classList.toggle('collapsed', savedCollapsed);
+                    if (mainContent) mainContent.classList.toggle('sidebar-collapsed', savedCollapsed);
+                }
+            });
+        })();
         // Close the drawer when the overlay backdrop is clicked.
         document.addEventListener('DOMContentLoaded', function() {
             const overlay = document.getElementById('sidebarOverlay');
