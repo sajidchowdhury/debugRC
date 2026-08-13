@@ -299,8 +299,11 @@
                                 </td>
                             </tr>
                         @empty
-                            <tr>
-                                <td colspan="9" class="text-center text-muted py-5">
+                            {{-- NOTE: Hidden from DataTables (colspan rows trigger
+                                tn/18 'Incorrect column count'). DataTables shows its
+                                own empty message via language.emptyTable. --}}
+                            <tr class="d-none">
+                                <td colspan="10" class="text-center text-muted py-5">
                                     <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
                                     No warehouse transfers found. Try adjusting filters or
                                     <a href="{{ route('admin.warehouse-transfers.create') }}">create a new one</a>.
@@ -328,7 +331,11 @@ $(function () {
         info: false,
         ordering: true,
         dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-        language: { search: 'Filter rows:', emptyTable: 'No warehouse transfers on this page.' }
+        language: {
+            search: 'Filter rows:',
+            emptyTable: 'No warehouse transfers found. Try adjusting filters or ' +
+                '<a href="{{ route('admin.warehouse-transfers.create') }}">create a new one</a>.'
+        }
     });
 
     // Update CSV export link with current filter params

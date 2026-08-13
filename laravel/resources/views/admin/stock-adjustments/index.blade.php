@@ -245,6 +245,7 @@
                         <option value="approved"  {{ $filters['status'] === 'approved' ? 'selected' : '' }}>Approved</option>
                         <option value="confirmed" {{ $filters['status'] === 'confirmed' ? 'selected' : '' }}>Confirmed</option>
                         <option value="cancelled" {{ $filters['status'] === 'cancelled' ? 'selected' : '' }}>Cancelled</option>
+                        <option value="rejected"  {{ $filters['status'] === 'rejected' ? 'selected' : '' }}>Rejected</option>
                     </select>
                 </div>
                 <div class="col-12 d-flex gap-2 justify-content-end">
@@ -325,7 +326,10 @@
                                 </td>
                             </tr>
                         @empty
-                            <tr>
+                            {{-- NOTE: Hidden from DataTables (colspan rows trigger
+                                tn/18 'Incorrect column count'). DataTables shows its
+                                own empty message via language.emptyTable. --}}
+                            <tr class="d-none">
                                 <td colspan="10" class="text-center text-muted py-5">
                                     <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
                                     No stock adjustments found. Try adjusting filters or
@@ -354,7 +358,11 @@ $(function () {
         info: false,
         ordering: true,
         dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-        language: { search: 'Filter rows:', emptyTable: 'No stock adjustments on this page.' }
+        language: {
+            search: 'Filter rows:',
+            emptyTable: 'No stock adjustments found. Try adjusting filters or ' +
+                '<a href="{{ route('admin.stock-adjustments.create') }}">create a new one</a>.'
+        }
     });
 });
 </script>

@@ -461,7 +461,10 @@
                                     </td>
                                 </tr>
                             @empty
-                                <tr><td colspan="9" class="sc-empty">
+                                {{-- NOTE: Hidden from DataTables (colspan rows trigger
+                                    tn/18 'Incorrect column count'). DataTables shows its
+                                    own empty message via language.emptyTable. --}}
+                                <tr class="d-none"><td colspan="9" class="sc-empty">
                                     <div class="sc-empty-icon"><i class="fas fa-inbox"></i></div>
                                     <div class="sc-empty-text">No issued challans found</div>
                                     <div class="sc-empty-sub">Try adjusting the filters</div>

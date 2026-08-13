@@ -501,7 +501,10 @@
                                 </td>
                             </tr>
                         @empty
-                            <tr>
+                            {{-- NOTE: Hidden from DataTables (colspan rows trigger
+                                tn/18 'Incorrect column count'). DataTables shows its
+                                own empty message via language.emptyTable. --}}
+                            <tr class="d-none">
                                 <td colspan="10" class="text-center text-muted py-5">
                                     <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
                                     No damage invoices found. Try adjusting filters or

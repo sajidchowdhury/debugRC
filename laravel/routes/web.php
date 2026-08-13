@@ -688,7 +688,8 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/stock-take', StockTakeController::class)
         ->only(['index', 'create', 'show'])
         ->names('admin.stock-take')
-        ->middleware('role:admin,manager,warehouse_manager,accountant');
+        ->middleware('role:admin,manager,warehouse_manager,accountant')
+        ->where(['stock_take' => '[0-9]+']);
     // store — split out: drops accountant (read-only) + adds branch.isolation
     // (the create form posts branch_id in the body).
     Route::post('admin/stock-take', [StockTakeController::class, 'store'])

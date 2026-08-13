@@ -181,7 +181,10 @@
                                 <td class="text-end text-nowrap">{{ number_format((float) $row->stock_value, 2) }}</td>
                             </tr>
                         @empty
-                            <tr>
+                            {{-- NOTE: Hidden from DataTables (colspan rows trigger
+                                tn/18 'Incorrect column count'). DataTables shows its
+                                own empty message via language.emptyTable. --}}
+                            <tr class="d-none">
                                 <td colspan="8" class="text-center text-muted py-4">
                                     <i class="fas fa-folder-open fa-2x mb-2 d-block opacity-50"></i>
                                     No on-hand stock balances match the current filters.
@@ -247,7 +250,8 @@
         searching: true,
         info: false,
         order: [],
-        dom: '<"row"<"col-md-6 text-start"f><"col-md-6 text-end"l>>rtip'
+        dom: '<"row"<"col-md-6 text-start"f><"col-md-6 text-end"l>>rtip',
+        language: { emptyTable: 'No on-hand stock balances match the current filters.' }
     });
 })();
 </script>
