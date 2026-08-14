@@ -58,61 +58,62 @@
     {{-- Sidebar toggle: chevron rotation when expanded --}}
     {{-- Sidebar modernization: dark slate-900 background, amber active accent,
          clean spacing/typography. Scoped to #sidebar so it only affects this
-         layout (not the legacy layouts/admin.blade.php). Overrides the legacy
-         light-gray #f7f7f7 from custom.css. --}}
+         layout (not the legacy layouts/admin.blade.php). Clean white with indigo accents. --}}
     <style>
         .sidebar-toggle[aria-expanded="true"] .fa-chevron-down { transform: rotate(180deg); transition: transform 0.2s ease; }
         .sidebar-toggle .fa-chevron-down { transition: transform 0.2s ease; }
 
-        /* ===== SIDEBAR — Crisp dark with indigo gradient ===== */
+        /* ===== SIDEBAR — Clean white with indigo accents ===== */
         #sidebar {
-            background: linear-gradient(180deg, #1e1b4b 0%, #1e2759 50%, #0f172a 100%) !important;
-            color: #e2e8f0;
-            border-right: 1px solid rgba(148,163,184,0.12);
+            background: #ffffff !important;
+            color: #334155;
+            border-right: 1px solid #e2e8f0;
             width: 260px;
         }
         #sidebar .sidebar-header {
-            padding: 14px 18px;
-            border-bottom: 1px solid rgba(148,163,184,0.12);
-            margin-bottom: 8px;
+            padding: 18px 18px 14px;
+            border-bottom: 1px solid #f1f5f9;
+            margin-bottom: 4px;
             display: flex;
             align-items: center;
             justify-content: space-between;
         }
         #sidebar .sidebar-header .logo {
-            font-size: 1.15rem; font-weight: 800; letter-spacing: 0.03em;
-            display: inline-flex; align-items: center; gap: 8px;
+            font-size: 1.2rem; font-weight: 800; letter-spacing: -0.02em;
+            display: inline-flex; align-items: center; gap: 10px;
             white-space: nowrap; overflow: hidden;
-            color: #f1f5f9;
+            color: #1e293b;
         }
-        #sidebar .sidebar-header .logo i { color: #f59e0b; font-size: 1rem; }
-        #sidebar .sidebar-header .logo .logo-text { color: #f1f5f9; }
+        #sidebar .sidebar-header .logo i { color: #6366f1; font-size: 1.1rem; }
+        #sidebar .sidebar-header .logo .logo-text { color: #1e293b; }
+        #sidebar .sidebar-header .logo .logo-text span { color: #6366f1; }
         #sidebar .nav-link {
-            color: #cbd5e1; border-radius: 8px; padding: 8px 14px; margin: 2px 8px;
-            font-size: 0.82rem; font-weight: 500; transition: background 0.15s ease, color 0.15s ease;
-            border-left: 3px solid transparent;
+            color: #64748b; border-radius: 10px; padding: 10px 14px; margin: 2px 10px;
+            font-size: 0.875rem; font-weight: 500; transition: all 0.2s ease;
+            border-left: none;
         }
-        #sidebar .nav-link:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        #sidebar .nav-link:hover { background: #f8fafc; color: #1e293b; }
         #sidebar .nav-link.active {
-            background: rgba(245,158,11,0.15) !important; color: #fbbf24 !important;
-            font-weight: 600; border-left-color: #f59e0b;
+            background: #6366f1 !important; color: #ffffff !important;
+            font-weight: 600; box-shadow: 0 2px 8px rgba(99,102,241,0.3);
         }
-        #sidebar .nav-link.active i, #sidebar .nav-link.active .fas { color: #fbbf24 !important; }
-        #sidebar .nav-link i { width: 18px; text-align: center; font-size: 0.9rem; }
+        #sidebar .nav-link.active i, #sidebar .nav-link.active .fas { color: #ffffff !important; }
+        #sidebar .nav-link i { width: 20px; text-align: center; font-size: 0.95rem; color: #94a3b8; }
+        #sidebar .nav-link:hover i { color: #6366f1; }
 
         /* ── Color-coded section icons ── */
-        #sidebar .nav-item[data-section="overview"] > .nav-link i { color: #34d399; }
-        #sidebar .nav-item[data-section="admin"] > .nav-link i { color: #a78bfa; }
-        #sidebar .nav-item[data-section="sales"] > .nav-link i { color: #fbbf24; }
-        #sidebar .nav-item[data-section="purchase"] > .nav-link i { color: #22d3ee; }
-        #sidebar .nav-item[data-section="inventory"] > .nav-link i { color: #4ade80; }
-        #sidebar .nav-item[data-section="finance"] > .nav-link i { color: #f472b6; }
-        #sidebar .nav-item[data-section="accounting"] > .nav-link i { color: #818cf8; }
-        #sidebar .nav-item[data-section="reports"] > .nav-link i { color: #fb923c; }
+        #sidebar .nav-item[data-section="overview"] > .nav-link i { color: #10b981; }
+        #sidebar .nav-item[data-section="admin"] > .nav-link i { color: #8b5cf6; }
+        #sidebar .nav-item[data-section="sales"] > .nav-link i { color: #f59e0b; }
+        #sidebar .nav-item[data-section="purchase"] > .nav-link i { color: #06b6d4; }
+        #sidebar .nav-item[data-section="inventory"] > .nav-link i { color: #22c55e; }
+        #sidebar .nav-item[data-section="finance"] > .nav-link i { color: #ec4899; }
+        #sidebar .nav-item[data-section="accounting"] > .nav-link i { color: #6366f1; }
+        #sidebar .nav-item[data-section="reports"] > .nav-link i { color: #f97316; }
         #sidebar .nav-item[data-section="system"] > .nav-link i { color: #94a3b8; }
 
-        #sidebar .submenu { border-left: 2px solid rgba(148,163,184,0.12); margin-left: 22px; }
-        #sidebar .submenu .nav-link { font-size: 0.78rem; padding-left: 18px; }
+        #sidebar .submenu { border-left: 2px solid #e2e8f0; margin-left: 22px; background: #fafafa; border-radius: 0 8px 8px 0; }
+        #sidebar .submenu .nav-link { font-size: 0.8rem; padding-left: 18px; }
         #sidebar .submenu:not(.is-open) { display: none; }
         #sidebar .submenu.is-open { display: block; }
 
@@ -120,26 +121,27 @@
         @media (max-width: 991.98px) {
             #sidebar {
                 position: fixed !important;
-                top: 55px;                                /* below sticky top-nav */
+                top: 60px;                                /* below sticky top-nav */
                 left: -280px;                            /* off-screen left */
                 bottom: 0;
-                height: calc(100vh - 55px) !important;
+                height: calc(100vh - 60px) !important;
                 width: 260px;
                 z-index: 1060;
                 transition: left 0.3s ease;
                 overflow-y: auto;
-                box-shadow: 0 0 40px rgba(0,0,0,0.3);
+                box-shadow: 4px 0 20px rgba(0,0,0,0.08);
             }
             #sidebar.active {
                 left: 0;                                 /* slide in */
             }
             #sidebarOverlay {
                 position: fixed;
-                top: 55px;                               /* below top-nav */
+                top: 60px;                               /* below top-nav */
                 left: 0;
                 right: 0;
                 bottom: 0;
-                background: rgba(15,23,42,0.55);        /* slate-900/55 */
+                background: rgba(15,23,42,0.3);
+                backdrop-filter: blur(4px);
                 z-index: 1055;
                 opacity: 0;
                 pointer-events: none;
@@ -160,10 +162,10 @@
         @media (min-width: 992px) {
             #sidebar {
                 position: fixed !important;
-                top: 55px;                                /* below sticky top-nav */
+                top: 60px;                                /* below sticky top-nav */
                 left: 0;
                 bottom: 0;
-                height: calc(100vh - 55px) !important;
+                height: calc(100vh - 60px) !important;
                 width: 260px;
                 z-index: 40;                             /* below top-nav z-50 */
             }
@@ -193,7 +195,7 @@
 
     @stack('css')
 </head>
-<body class="bg-gradient-to-b from-amber-50/30 to-white min-h-screen flex flex-col font-sans text-gray-900">
+<body class="bg-slate-50 min-h-screen flex flex-col font-sans text-gray-900">
 
     {{-- LOW-F (G-313): Global investigation-mode banner. Renders only when
          INVESTIGATION mode is active ($isInvestigation shared by the
@@ -244,7 +246,7 @@
                 <div class="sidebar-header">
                     <span class="logo">
                         <i class="fas fa-store"></i>
-                        <span class="logo-text">Remote Center</span>
+                        <span class="logo-text">Remote<span>Center</span></span>
                     </span>
                 </div>
                 <ul class="nav flex-column" id="sidebarMenu">

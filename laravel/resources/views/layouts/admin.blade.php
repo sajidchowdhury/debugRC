@@ -31,99 +31,97 @@
         filemtime() cache-busting ensures browsers always fetch the latest CSS. --}}
     <link rel="stylesheet" href="/assets/css/rc-erp.css?v={{ filemtime(public_path('assets/css/rc-erp.css')) }}">
 
-    {{-- Sidebar toggle: chevron rotation when expanded --}}
-    {{-- Sidebar modernization: dark slate-900 background, amber active accent,
-         clean spacing/typography. Scoped to #sidebar so it overrides the legacy
-         light-gray #f7f7f7 from custom.css. On mobile (<lg) the sidebar becomes
-         a fixed slide-in drawer with an overlay backdrop (matching the Z.ai
-         preview / x-layouts.erp design). Ported from components/layouts/erp.blade.php
-         so EVERY page that extends layouts.admin gets the same premium sidebar. --}}
+    {{-- Sidebar: clean white theme with indigo/purple active states
+         (succeed+ style). Scoped to #sidebar so it overrides the legacy
+         light-gray from custom.css. On mobile (<lg) the sidebar becomes
+         a fixed slide-in drawer with overlay backdrop. --}}
     <style>
         /* ── Chevron rotation ── */
         .sidebar-toggle[aria-expanded="true"] .fa-chevron-down { transform: rotate(180deg); }
         .sidebar-toggle .fa-chevron-down { transition: transform 0.25s ease; }
 
-        /* ── Animations ── */
-        @keyframes activeGlow { 0%,100%{box-shadow:0 0 8px rgba(245,158,11,0.15)}50%{box-shadow:0 0 18px rgba(245,158,11,0.3)} }
-
-        /* ===== SIDEBAR — Crisp dark with indigo gradient ===== */
+        /* ===== SIDEBAR — Clean white with indigo accents ===== */
         #sidebar {
-            background: linear-gradient(180deg, #1e1b4b 0%, #1e2759 50%, #0f172a 100%) !important;
-            color: #e2e8f0;
-            border-right: 1px solid rgba(148,163,184,0.12);
+            background: #ffffff !important;
+            color: #334155;
+            border-right: 1px solid #e2e8f0;
             width: 264px;
             position: fixed !important;
-            top: 55px;
+            top: 60px;
             left: 0;
             z-index: 40 !important;
             overflow-y: auto;
             overflow-x: hidden;
             transition: width 0.3s cubic-bezier(0.4,0,0.2,1);
             scrollbar-width: thin;
-            scrollbar-color: rgba(148,163,184,0.2) transparent;
+            scrollbar-color: #cbd5e1 transparent;
         }
         #sidebar::-webkit-scrollbar { width: 4px; }
-        #sidebar::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 4px; }
+        #sidebar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
 
         /* ── Header ── */
         #sidebar .sidebar-header {
-            padding: 14px 14px 12px;
-            border-bottom: 1px solid rgba(148,163,184,0.12);
-            margin-bottom: 6px;
+            padding: 18px 18px 14px;
+            border-bottom: 1px solid #f1f5f9;
+            margin-bottom: 4px;
             display: flex;
             align-items: center;
             justify-content: space-between;
         }
         #sidebar .sidebar-header .logo {
-            font-size: 1.15rem; font-weight: 800; letter-spacing: 0.03em;
-            display: inline-flex; align-items: center; gap: 8px;
+            font-size: 1.2rem; font-weight: 800; letter-spacing: -0.02em;
+            display: inline-flex; align-items: center; gap: 10px;
             white-space: nowrap; overflow: hidden;
-            color: #f1f5f9;
+            color: #1e293b;
         }
-        #sidebar .sidebar-header .logo i { color: #f59e0b; font-size: 1rem; }
-        #sidebar .sidebar-header .logo .logo-text { color: #f1f5f9; }
+        #sidebar .sidebar-header .logo i { color: #6366f1; font-size: 1.1rem; }
+        #sidebar .sidebar-header .logo .logo-text { color: #1e293b; }
+        #sidebar .sidebar-header .logo .logo-text span { color: #6366f1; }
 
         /* ── Collapse toggle ── */
         #sidebarCollapseBtn {
             display: flex; align-items: center; justify-content: center;
             width: 28px; height: 28px; border-radius: 8px;
-            border: 1px solid rgba(148,163,184,0.25); background: rgba(148,163,184,0.08);
-            color: #cbd5e1; cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
+            border: 1px solid #e2e8f0; background: #f8fafc;
+            color: #64748b; cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
         }
-        #sidebarCollapseBtn:hover { background: rgba(148,163,184,0.15); color: #f1f5f9; border-color: rgba(148,163,184,0.35); }
-        #sidebarCollapseBtn i { transition: transform 0.3s ease; font-size: 0.7rem; }
+        #sidebarCollapseBtn:hover { background: #f1f5f9; color: #334155; border-color: #cbd5e1; }
+        #sidebarCollapseBtn i { transition: transform 0.3s ease; font-size: 0.65rem; }
 
-        /* ── Nav links — BRIGHT readable text ── */
+        /* ── Nav links — clean, readable ── */
         #sidebar .nav-link {
-            color: #cbd5e1; border-radius: 10px; padding: 9px 14px; margin: 2px 8px;
-            font-size: 0.82rem; font-weight: 500; transition: all 0.2s ease;
-            border-left: 3px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            color: #64748b; border-radius: 10px; padding: 10px 14px; margin: 2px 10px;
+            font-size: 0.875rem; font-weight: 500; transition: all 0.2s ease;
+            border-left: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        #sidebar .nav-link:hover { background: rgba(255,255,255,0.08); color: #fff; transform: translateX(2px); }
+        #sidebar .nav-link:hover {
+            background: #f8fafc; color: #1e293b;
+        }
         #sidebar .nav-link.active {
-            background: linear-gradient(90deg,rgba(245,158,11,0.2),rgba(249,115,22,0.1)) !important;
-            color: #fbbf24 !important; font-weight: 600; border-left-color: #f59e0b;
-            animation: activeGlow 3s ease-in-out infinite;
+            background: #6366f1 !important;
+            color: #ffffff !important; font-weight: 600;
+            box-shadow: 0 2px 8px rgba(99,102,241,0.3);
         }
-        #sidebar .nav-link.active i, #sidebar .nav-link.active .fas { color: #fbbf24 !important; }
-        #sidebar .nav-link i { width: 20px; text-align: center; font-size: 0.9rem; }
+        #sidebar .nav-link.active i, #sidebar .nav-link.active .fas { color: #ffffff !important; }
+        #sidebar .nav-link i { width: 20px; text-align: center; font-size: 0.95rem; color: #94a3b8; }
+        #sidebar .nav-link:hover i { color: #6366f1; }
 
-        /* ── Color-coded section icons — VIVID ── */
-        #sidebar .nav-item[data-section="overview"] > .nav-link i { color: #34d399; }
-        #sidebar .nav-item[data-section="admin"] > .nav-link i { color: #a78bfa; }
-        #sidebar .nav-item[data-section="sales"] > .nav-link i { color: #fbbf24; }
-        #sidebar .nav-item[data-section="purchase"] > .nav-link i { color: #22d3ee; }
-        #sidebar .nav-item[data-section="inventory"] > .nav-link i { color: #4ade80; }
-        #sidebar .nav-item[data-section="finance"] > .nav-link i { color: #f472b6; }
-        #sidebar .nav-item[data-section="accounting"] > .nav-link i { color: #818cf8; }
-        #sidebar .nav-item[data-section="reports"] > .nav-link i { color: #fb923c; }
+        /* ── Color-coded section icons (subtle tints for sidebar groups) ── */
+        #sidebar .nav-item[data-section="overview"] > .nav-link i { color: #10b981; }
+        #sidebar .nav-item[data-section="admin"] > .nav-link i { color: #8b5cf6; }
+        #sidebar .nav-item[data-section="sales"] > .nav-link i { color: #f59e0b; }
+        #sidebar .nav-item[data-section="purchase"] > .nav-link i { color: #06b6d4; }
+        #sidebar .nav-item[data-section="inventory"] > .nav-link i { color: #22c55e; }
+        #sidebar .nav-item[data-section="finance"] > .nav-link i { color: #ec4899; }
+        #sidebar .nav-item[data-section="accounting"] > .nav-link i { color: #6366f1; }
+        #sidebar .nav-item[data-section="reports"] > .nav-link i { color: #f97316; }
         #sidebar .nav-item[data-section="system"] > .nav-link i { color: #94a3b8; }
 
         /* ── Submenu ── */
-        #sidebar .submenu { border-left: 2px solid rgba(148,163,184,0.12); margin-left: 24px; overflow: hidden; transition: max-height 0.35s ease, opacity 0.25s ease; }
+        #sidebar .submenu { border-left: 2px solid #e2e8f0; margin-left: 24px; overflow: hidden; transition: max-height 0.35s ease, opacity 0.25s ease; background: #fafafa; border-radius: 0 8px 8px 0; }
         #sidebar .submenu:not(.is-open) { max-height: 0 !important; opacity: 0; pointer-events: none; }
         #sidebar .submenu.is-open { max-height: 2000px; opacity: 1; pointer-events: auto; }
-        #sidebar .submenu .nav-link { font-size: 0.75rem; padding: 6px 14px 6px 16px; }
+        #sidebar .submenu .nav-link { font-size: 0.8rem; padding: 7px 14px 7px 16px; }
 
         /* ── Collapsed state ── */
         #sidebar.collapsed { width: 64px !important; }
@@ -131,7 +129,7 @@
         #sidebar.collapsed .nav-link span,
         #sidebar.collapsed .sidebar-toggle .fa-chevron-down,
         #sidebar.collapsed .submenu { display: none !important; }
-        #sidebar.collapsed .nav-link { justify-content: center; padding: 10px; margin: 3px 6px; border-left-width: 0; }
+        #sidebar.collapsed .nav-link { justify-content: center; padding: 10px; margin: 3px 6px; }
         #sidebar.collapsed .nav-link i { width: auto; font-size: 1rem; }
         #sidebar.collapsed .sidebar-header { justify-content: center; padding: 14px 8px 10px; }
         #sidebar.collapsed .sidebar-header .logo i { font-size: 1.2rem; }
@@ -139,18 +137,18 @@
 
         /* ===== MOBILE DRAWER ===== */
         @media (max-width: 991.98px) {
-            #sidebar { position: fixed !important; top: 55px; left: -280px; bottom: 0; height: calc(100vh - 55px) !important; width: 264px; z-index: 1060; box-shadow: 0 0 60px rgba(0,0,0,0.5); transition: left 0.3s cubic-bezier(0.4,0,0.2,1); }
+            #sidebar { position: fixed !important; top: 60px; left: -280px; bottom: 0; height: calc(100vh - 60px) !important; width: 264px; z-index: 1060; box-shadow: 4px 0 20px rgba(0,0,0,0.08); transition: left 0.3s cubic-bezier(0.4,0,0.2,1); }
             #sidebar.active { left: 0; }
             #sidebar.collapsed { width: 264px !important; }
             #sidebar.collapsed .logo-text, #sidebar.collapsed .nav-link span, #sidebar.collapsed .sidebar-toggle .fa-chevron-down, #sidebar.collapsed .submenu { display: initial !important; }
-            #sidebarOverlay { position: fixed; top: 55px; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,0.6); backdrop-filter: blur(4px); z-index: 1055; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+            #sidebarOverlay { position: fixed; top: 60px; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,0.3); backdrop-filter: blur(4px); z-index: 1055; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
             #sidebarOverlay.active { opacity: 1; pointer-events: auto; }
             #mainContent { margin-left: 0 !important; width: 100% !important; }
         }
 
         /* ===== DESKTOP ===== */
         @media (min-width: 992px) {
-            #sidebar { height: calc(100vh - 55px) !important; }
+            #sidebar { height: calc(100vh - 60px) !important; }
             #mainContent { margin-left: 264px !important; width: calc(100% - 264px) !important; max-width: none !important; transition: margin-left 0.3s cubic-bezier(0.4,0,0.2,1), width 0.3s cubic-bezier(0.4,0,0.2,1); }
             #mainContent.sidebar-collapsed { margin-left: 64px !important; width: calc(100% - 64px) !important; }
         }
@@ -171,7 +169,7 @@
 
     @stack('css')
 </head>
-<body class="bg-gradient-to-b from-amber-50/30 to-white min-h-screen flex flex-col font-sans text-gray-900">
+<body class="bg-slate-50 min-h-screen flex flex-col font-sans text-gray-900">
 
     {{-- LOW-F (G-313): Global investigation-mode banner. Renders only when
          INVESTIGATION mode is active ($isInvestigation shared by the
@@ -219,7 +217,7 @@
                 <div class="sidebar-header">
                     <span class="logo">
                         <i class="fas fa-store"></i>
-                        <span class="logo-text">Remote Center</span>
+                        <span class="logo-text">Remote<span>Center</span></span>
                     </span>
                     <button type="button" id="sidebarCollapseBtn" title="Collapse sidebar" aria-label="Toggle sidebar">
                         <i class="fas fa-chevron-left"></i>
