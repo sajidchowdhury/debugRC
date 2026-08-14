@@ -223,7 +223,7 @@
                 <div class="sidebar-header">
                     <span class="logo">
                         <i class="fas fa-store"></i>
-                        <span class="logo-text">RC ERP</span>
+                        <span class="logo-text">Remote Center</span>
                     </span>
                     <button type="button" id="sidebarCollapseBtn" title="Collapse sidebar" aria-label="Toggle sidebar">
                         <i class="fas fa-chevron-left"></i>
@@ -240,7 +240,17 @@
                             'Accounting' => 'accounting', 'Reports' => 'reports',
                             'System' => 'system',
                         ];
+                        $isDashboardActive = $currentUri === '/admin/dashboard' || $currentUri === route('dashboard', [], false);
                     @endphp
+
+                    {{-- Dashboard link — always first item above Overview --}}
+                    <li class="nav-item" data-section="overview">
+                        <a href="{{ route('dashboard') }}"
+                           class="nav-link d-flex align-items-center {{ $isDashboardActive ? 'active' : '' }}">
+                            <i class="fas fa-gauge-high"></i>
+                            <span class="ms-2">Dashboard</span>
+                        </a>
+                    </li>
 
                     @foreach ($menuTree as $mainMenu)
                         @php
