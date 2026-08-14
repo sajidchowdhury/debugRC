@@ -61,83 +61,60 @@
          layout (not the legacy layouts/admin.blade.php). Overrides the legacy
          light-gray #f7f7f7 from custom.css. --}}
     <style>
-        .sidebar-toggle[aria-expanded="true"] .fa-chevron-down {
-            transform: rotate(180deg);
-            transition: transform 0.2s ease;
-        }
-        .sidebar-toggle .fa-chevron-down {
-            transition: transform 0.2s ease;
-        }
+        .sidebar-toggle[aria-expanded="true"] .fa-chevron-down { transform: rotate(180deg); transition: transform 0.2s ease; }
+        .sidebar-toggle .fa-chevron-down { transition: transform 0.2s ease; }
 
-        /* ===== MODERN SIDEBAR (dark slate, matching the design preview) ===== */
+        /* ===== SIDEBAR — Crisp dark with indigo gradient ===== */
         #sidebar {
-            background: #0f172a !important;            /* slate-900 */
-            color: #cbd5e1;                              /* slate-300 */
-            border-right: 1px solid #1e293b;             /* slate-800 */
+            background: linear-gradient(180deg, #1e1b4b 0%, #1e2759 50%, #0f172a 100%) !important;
+            color: #e2e8f0;
+            border-right: 1px solid rgba(148,163,184,0.12);
             width: 260px;
         }
         #sidebar .sidebar-header {
             padding: 14px 18px;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
+            border-bottom: 1px solid rgba(148,163,184,0.12);
             margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
         #sidebar .sidebar-header .logo {
-            color: #f8fafc;                              /* slate-50 */
-            font-size: 1.05rem;
-            font-weight: 700;
-            letter-spacing: 0.01em;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
+            font-size: 1.15rem; font-weight: 800; letter-spacing: 0.03em;
+            display: inline-flex; align-items: center; gap: 8px;
+            white-space: nowrap; overflow: hidden;
+            color: #f1f5f9;
         }
-        #sidebar .sidebar-header .logo i {
-            color: #f59e0b;                              /* amber-500 */
-            font-size: 1.1rem;
-        }
+        #sidebar .sidebar-header .logo i { color: #f59e0b; font-size: 1rem; }
+        #sidebar .sidebar-header .logo .logo-text { color: #f1f5f9; }
         #sidebar .nav-link {
-            color: #94a3b8;                              /* slate-400 */
-            border-radius: 8px;
-            padding: 8px 14px;
-            margin: 2px 8px;
-            font-size: 0.8125rem;
-            font-weight: 500;
-            transition: background 0.15s ease, color 0.15s ease;
+            color: #cbd5e1; border-radius: 8px; padding: 8px 14px; margin: 2px 8px;
+            font-size: 0.82rem; font-weight: 500; transition: background 0.15s ease, color 0.15s ease;
             border-left: 3px solid transparent;
         }
-        #sidebar .nav-link:hover {
-            background: rgba(255,255,255,0.06);
-            color: #f1f5f9;                              /* slate-100 */
-        }
+        #sidebar .nav-link:hover { background: rgba(255,255,255,0.08); color: #fff; }
         #sidebar .nav-link.active {
-            background: rgba(245,158,11,0.10) !important; /* amber tint */
-            color: #fbbf24 !important;                   /* amber-400 */
-            font-weight: 600;
-            border-left-color: #f59e0b;                  /* amber-500 */
+            background: rgba(245,158,11,0.15) !important; color: #fbbf24 !important;
+            font-weight: 600; border-left-color: #f59e0b;
         }
-        #sidebar .nav-link.active i,
-        #sidebar .nav-link.active .fas {
-            color: #fbbf24 !important;                   /* amber-400 */
-        }
-        #sidebar .nav-link i {
-            width: 18px;
-            text-align: center;
-            font-size: 0.85rem;
-        }
-        #sidebar .submenu {
-            border-left: 1px solid rgba(255,255,255,0.06);
-            margin-left: 22px;
-        }
-        #sidebar .submenu .nav-link {
-            font-size: 0.78rem;
-            padding-left: 18px;
-        }
-        /* Submenu show/hide via .is-open (no Bootstrap .collapse) */
-        #sidebar .submenu:not(.is-open) {
-            display: none;
-        }
-        #sidebar .submenu.is-open {
-            display: block;
-        }
+        #sidebar .nav-link.active i, #sidebar .nav-link.active .fas { color: #fbbf24 !important; }
+        #sidebar .nav-link i { width: 18px; text-align: center; font-size: 0.9rem; }
+
+        /* ── Color-coded section icons ── */
+        #sidebar .nav-item[data-section="overview"] > .nav-link i { color: #34d399; }
+        #sidebar .nav-item[data-section="admin"] > .nav-link i { color: #a78bfa; }
+        #sidebar .nav-item[data-section="sales"] > .nav-link i { color: #fbbf24; }
+        #sidebar .nav-item[data-section="purchase"] > .nav-link i { color: #22d3ee; }
+        #sidebar .nav-item[data-section="inventory"] > .nav-link i { color: #4ade80; }
+        #sidebar .nav-item[data-section="finance"] > .nav-link i { color: #f472b6; }
+        #sidebar .nav-item[data-section="accounting"] > .nav-link i { color: #818cf8; }
+        #sidebar .nav-item[data-section="reports"] > .nav-link i { color: #fb923c; }
+        #sidebar .nav-item[data-section="system"] > .nav-link i { color: #94a3b8; }
+
+        #sidebar .submenu { border-left: 2px solid rgba(148,163,184,0.12); margin-left: 22px; }
+        #sidebar .submenu .nav-link { font-size: 0.78rem; padding-left: 18px; }
+        #sidebar .submenu:not(.is-open) { display: none; }
+        #sidebar .submenu.is-open { display: block; }
 
         /* ===== MOBILE DRAWER (< lg / 991.98px) ===== */
         @media (max-width: 991.98px) {

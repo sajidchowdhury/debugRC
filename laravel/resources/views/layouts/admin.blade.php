@@ -44,14 +44,13 @@
         .sidebar-toggle .fa-chevron-down { transition: transform 0.25s ease; }
 
         /* ── Animations ── */
-        @keyframes sidebarShimmer { 0%{background-position:-200% center}100%{background-position:200% center} }
-        @keyframes activeGlow { 0%,100%{box-shadow:0 0 8px rgba(245,158,11,0.12)}50%{box-shadow:0 0 18px rgba(245,158,11,0.28)} }
+        @keyframes activeGlow { 0%,100%{box-shadow:0 0 8px rgba(245,158,11,0.15)}50%{box-shadow:0 0 18px rgba(245,158,11,0.3)} }
 
-        /* ===== SIDEBAR — Premium dark-glass with purple gradient ===== */
+        /* ===== SIDEBAR — Crisp dark with indigo gradient ===== */
         #sidebar {
-            background: linear-gradient(180deg, #0f172a 0%, #1e1b4b 40%, #0f172a 100%) !important;
-            color: #cbd5e1;
-            border-right: 1px solid rgba(139,92,246,0.15);
+            background: linear-gradient(180deg, #1e1b4b 0%, #1e2759 50%, #0f172a 100%) !important;
+            color: #e2e8f0;
+            border-right: 1px solid rgba(148,163,184,0.12);
             width: 264px;
             position: fixed !important;
             top: 55px;
@@ -61,70 +60,67 @@
             overflow-x: hidden;
             transition: width 0.3s cubic-bezier(0.4,0,0.2,1);
             scrollbar-width: thin;
-            scrollbar-color: rgba(139,92,246,0.3) transparent;
+            scrollbar-color: rgba(148,163,184,0.2) transparent;
         }
         #sidebar::-webkit-scrollbar { width: 4px; }
-        #sidebar::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 4px; }
+        #sidebar::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 4px; }
 
         /* ── Header ── */
         #sidebar .sidebar-header {
-            padding: 14px 14px 10px;
-            border-bottom: 1px solid rgba(139,92,246,0.12);
-            margin-bottom: 4px;
+            padding: 14px 14px 12px;
+            border-bottom: 1px solid rgba(148,163,184,0.12);
+            margin-bottom: 6px;
             display: flex;
             align-items: center;
             justify-content: space-between;
         }
         #sidebar .sidebar-header .logo {
-            background: linear-gradient(90deg,#f59e0b,#f97316,#ef4444,#f97316,#f59e0b);
-            background-size: 200% auto;
-            animation: sidebarShimmer 4s linear infinite;
-            -webkit-background-clip: text; background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-size: 1.1rem; font-weight: 800; letter-spacing: 0.02em;
+            font-size: 1.15rem; font-weight: 800; letter-spacing: 0.03em;
             display: inline-flex; align-items: center; gap: 8px;
             white-space: nowrap; overflow: hidden;
+            color: #f1f5f9;
         }
-        #sidebar .sidebar-header .logo i { -webkit-text-fill-color: #f59e0b; font-size: 1rem; }
+        #sidebar .sidebar-header .logo i { color: #f59e0b; font-size: 1rem; }
+        #sidebar .sidebar-header .logo .logo-text { color: #f1f5f9; }
 
         /* ── Collapse toggle ── */
         #sidebarCollapseBtn {
             display: flex; align-items: center; justify-content: center;
-            width: 26px; height: 26px; border-radius: 7px;
-            border: 1px solid rgba(139,92,246,0.2); background: rgba(139,92,246,0.08);
-            color: #a78bfa; cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
+            width: 28px; height: 28px; border-radius: 8px;
+            border: 1px solid rgba(148,163,184,0.25); background: rgba(148,163,184,0.08);
+            color: #cbd5e1; cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
         }
-        #sidebarCollapseBtn:hover { background: rgba(139,92,246,0.2); color: #c4b5fd; }
-        #sidebarCollapseBtn i { transition: transform 0.3s ease; font-size: 0.65rem; }
+        #sidebarCollapseBtn:hover { background: rgba(148,163,184,0.15); color: #f1f5f9; border-color: rgba(148,163,184,0.35); }
+        #sidebarCollapseBtn i { transition: transform 0.3s ease; font-size: 0.7rem; }
 
-        /* ── Nav links ── */
+        /* ── Nav links — BRIGHT readable text ── */
         #sidebar .nav-link {
-            color: #94a3b8; border-radius: 10px; padding: 9px 14px; margin: 2px 8px;
-            font-size: 0.8rem; font-weight: 500; transition: all 0.2s ease;
+            color: #cbd5e1; border-radius: 10px; padding: 9px 14px; margin: 2px 8px;
+            font-size: 0.82rem; font-weight: 500; transition: all 0.2s ease;
             border-left: 3px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        #sidebar .nav-link:hover { background: rgba(255,255,255,0.05); color: #e2e8f0; transform: translateX(2px); }
+        #sidebar .nav-link:hover { background: rgba(255,255,255,0.08); color: #fff; transform: translateX(2px); }
         #sidebar .nav-link.active {
-            background: linear-gradient(90deg,rgba(245,158,11,0.15),rgba(249,115,22,0.08)) !important;
+            background: linear-gradient(90deg,rgba(245,158,11,0.2),rgba(249,115,22,0.1)) !important;
             color: #fbbf24 !important; font-weight: 600; border-left-color: #f59e0b;
             animation: activeGlow 3s ease-in-out infinite;
         }
         #sidebar .nav-link.active i, #sidebar .nav-link.active .fas { color: #fbbf24 !important; }
-        #sidebar .nav-link i { width: 20px; text-align: center; font-size: 0.85rem; }
+        #sidebar .nav-link i { width: 20px; text-align: center; font-size: 0.9rem; }
 
-        /* ── Color-coded section icons ── */
-        #sidebar .nav-item[data-section="overview"] > .nav-link i { color: #10b981; }
-        #sidebar .nav-item[data-section="admin"] > .nav-link i { color: #8b5cf6; }
-        #sidebar .nav-item[data-section="sales"] > .nav-link i { color: #f59e0b; }
-        #sidebar .nav-item[data-section="purchase"] > .nav-link i { color: #06b6d4; }
-        #sidebar .nav-item[data-section="inventory"] > .nav-link i { color: #22c55e; }
-        #sidebar .nav-item[data-section="finance"] > .nav-link i { color: #ec4899; }
-        #sidebar .nav-item[data-section="accounting"] > .nav-link i { color: #6366f1; }
-        #sidebar .nav-item[data-section="reports"] > .nav-link i { color: #f97316; }
-        #sidebar .nav-item[data-section="system"] > .nav-link i { color: #64748b; }
+        /* ── Color-coded section icons — VIVID ── */
+        #sidebar .nav-item[data-section="overview"] > .nav-link i { color: #34d399; }
+        #sidebar .nav-item[data-section="admin"] > .nav-link i { color: #a78bfa; }
+        #sidebar .nav-item[data-section="sales"] > .nav-link i { color: #fbbf24; }
+        #sidebar .nav-item[data-section="purchase"] > .nav-link i { color: #22d3ee; }
+        #sidebar .nav-item[data-section="inventory"] > .nav-link i { color: #4ade80; }
+        #sidebar .nav-item[data-section="finance"] > .nav-link i { color: #f472b6; }
+        #sidebar .nav-item[data-section="accounting"] > .nav-link i { color: #818cf8; }
+        #sidebar .nav-item[data-section="reports"] > .nav-link i { color: #fb923c; }
+        #sidebar .nav-item[data-section="system"] > .nav-link i { color: #94a3b8; }
 
         /* ── Submenu ── */
-        #sidebar .submenu { border-left: 2px solid rgba(139,92,246,0.1); margin-left: 24px; overflow: hidden; transition: max-height 0.35s ease, opacity 0.25s ease; }
+        #sidebar .submenu { border-left: 2px solid rgba(148,163,184,0.12); margin-left: 24px; overflow: hidden; transition: max-height 0.35s ease, opacity 0.25s ease; }
         #sidebar .submenu:not(.is-open) { max-height: 0 !important; opacity: 0; pointer-events: none; }
         #sidebar .submenu.is-open { max-height: 2000px; opacity: 1; pointer-events: auto; }
         #sidebar .submenu .nav-link { font-size: 0.75rem; padding: 6px 14px 6px 16px; }
