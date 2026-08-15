@@ -1,11 +1,11 @@
 {{--
-  x-erp.top-nav — Clean light-theme top navigation bar
+  x-erp.top-nav — Minimal clean top navigation bar
 
-  Inspired by modern SaaS dashboards (succeed+ style):
+  Simple & clean design:
     - White background with subtle bottom border
-    - Left: hamburger (mobile) + page title
+    - Left: hamburger (mobile only)
     - Right: role badge | branch | notification bell | user dropdown
-    - Indigo/purple accents for interactive elements
+    - Brand name lives in sidebar only — removed from top bar
 
   Usage:
     <x-erp.top-nav />
@@ -39,33 +39,13 @@
     $initials = $employeeName
         ? strtoupper(mb_substr($employeeName, 0, 1) . (mb_substr($employeeName, 1, 1) ?: ''))
         : strtoupper(mb_substr($userName, 0, 1));
-
-    // Derive page title from route or fallback
-    $pageTitle = $title ?? null;
-    if (!$pageTitle) {
-        $routeName = request()->route()?->getName() ?? '';
-        $pageTitle = match(true) {
-            str_contains($routeName, 'dashboard') => 'Dashboard',
-            str_contains($routeName, 'sales') => 'Sales',
-            str_contains($routeName, 'purchase') => 'Purchase',
-            str_contains($routeName, 'inventory') => 'Inventory',
-            str_contains($routeName, 'finance') => 'Finance',
-            str_contains($routeName, 'accounting') => 'Accounting',
-            str_contains($routeName, 'report') => 'Reports',
-            str_contains($routeName, 'admin') => 'Administration',
-            str_contains($routeName, 'compliance') => 'Compliance',
-            str_contains($routeName, 'archive') => 'Archive',
-            str_contains($routeName, 'notification') => 'Notifications',
-            default => 'Overview',
-        };
-    }
 @endphp
 
 <style>
     /* ── Notification badge pulse ── */
     @keyframes notifPulse {
         0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
-        50%      { box-shadow: 0 0 0 4px rgba(239,68,68,0); }
+        50%      { box-shadow: 0 0 0 5px rgba(239,68,68,0); }
     }
     .notif-pulse { animation: notifPulse 2s ease-in-out infinite; }
 
@@ -73,7 +53,87 @@
     .rc-topnav {
         background: #ffffff;
         border-bottom: 1px solid #e2e8f0;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    /* ── Hamburger: mobile-only, clean circle button ── */
+    .rc-hamburger {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border: none;
+        background: transparent;
+        color: #475569;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .rc-hamburger:hover {
+        background: #f1f5f9;
+        color: #1e293b;
+    }
+    .rc-hamburger:active {
+        background: #e2e8f0;
+        transform: scale(0.92);
+    }
+
+    /* ── Notification bell: refined circle with border ── */
+    .rc-notif-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        border: 1.5px solid #e2e8f0;
+        background: #ffffff;
+        color: #64748b;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        position: relative;
+    }
+    .rc-notif-btn:hover {
+        border-color: #c7d2fe;
+        background: #f5f3ff;
+        color: #6366f1;
+    }
+    .rc-notif-btn:active {
+        background: #ede9fe;
+        transform: scale(0.92);
+    }
+
+    /* ── User avatar button: clean pill shape ── */
+    .rc-user-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 12px 4px 4px;
+        border-radius: 100px;
+        border: 1.5px solid #e2e8f0;
+        background: #ffffff;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .rc-user-btn:hover {
+        border-color: #c7d2fe;
+        background: #f5f3ff;
+    }
+    .rc-user-btn:active {
+        background: #ede9fe;
+    }
+    .rc-user-avatar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: #6366f1;
+        color: #ffffff;
+        font-size: 0.7rem;
+        font-weight: 700;
+        flex-shrink: 0;
     }
 
     /* ── Dropdown theme: light, crisp ── */
@@ -114,33 +174,35 @@
     .rc-role-violet  { background: #f5f3ff; color: #7c3aed; border: 1px solid #ddd6fe; }
     .rc-role-emerald { background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; }
     .rc-role-slate   { background: #f8fafc; color: #475569; border: 1px solid #e2e8f0; }
+
+    /* ── Mobile only ── */
+    @media (min-width: 992px) {
+        .rc-mobile-only { display: none !important; }
+    }
+    @media (max-width: 991.98px) {
+        .rc-mobile-only { display: flex !important; }
+    }
 </style>
 
 {{-- ==================== STICKY TOP NAV ==================== --}}
 <div class="rc-topnav sticky top-0 z-50 no-print">
-    <div class="px-4 sm:px-6 h-[60px] flex items-center justify-between gap-4">
+    <div class="px-4 sm:px-6 h-[56px] flex items-center justify-between">
 
-        {{-- LEFT: hamburger + brand --}}
-        <div class="flex items-center gap-3 min-w-0">
-            {{-- Mobile hamburger — lg:hidden only --}}
+        {{-- LEFT: hamburger (mobile ONLY) --}}
+        <div class="flex items-center">
             <button type="button"
-                    class="flex items-center justify-center w-9 h-9 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 active:bg-slate-200 transition-all lg:hidden"
+                    class="rc-hamburger rc-mobile-only"
                     onclick="toggleSidebar()"
                     aria-label="Toggle menu">
-                <i class="fas fa-bars text-lg"></i>
+                <i class="fas fa-bars" style="font-size:1.05rem;"></i>
             </button>
-
-            {{-- Brand --}}
-            <span class="text-slate-800 font-bold text-xl tracking-tight select-none whitespace-nowrap">
-                Remote<span class="text-indigo-500">Center</span>
-            </span>
         </div>
 
         {{-- RIGHT: role → branch → notification → user --}}
-        <div class="flex items-center gap-2 sm:gap-3">
+        <div class="flex items-center gap-2.5 sm:gap-3 ml-auto">
 
-            {{-- Role badge — always visible --}}
-            <span class="rc-role-{{ $roleCfg['color'] }} inline-flex items-center gap-1.5 font-semibold text-xs sm:text-sm rounded-full px-2.5 sm:px-3 py-1 transition-colors">
+            {{-- Role badge --}}
+            <span class="rc-role-{{ $roleCfg['color'] }} inline-flex items-center gap-1.5 font-semibold text-xs rounded-full px-2.5 py-1 transition-colors select-none">
                 <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span>
                 {{ $roleCfg['label'] }}
             </span>
@@ -148,11 +210,11 @@
             {{-- Branch selector --}}
             @if ($canSwitchBranch && $branches->isNotEmpty())
                 <form method="POST" action="{{ route('branch.switch') }}"
-                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 sm:px-3 py-1 bg-slate-50 border border-slate-200 hover:border-slate-300 transition-colors">
+                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-slate-50 border border-slate-200 hover:border-slate-300 transition-colors">
                     @csrf
-                    <i class="fas fa-location-dot text-xs text-slate-400"></i>
+                    <i class="fas fa-location-dot text-[0.65rem] text-slate-400"></i>
                     <select name="branch_id" onchange="this.form.submit()"
-                            class="bg-transparent border-0 text-xs sm:text-sm font-medium text-slate-600 outline-none cursor-pointer focus:ring-0 hover:text-slate-800 transition-colors max-w-[90px] sm:max-w-[200px] truncate"
+                            class="bg-transparent border-0 text-xs font-medium text-slate-600 outline-none cursor-pointer focus:ring-0 hover:text-slate-800 transition-colors max-w-[80px] sm:max-w-[180px] truncate"
                             aria-label="Switch branch">
                         @foreach ($branches as $branch)
                             <option value="{{ $branch->id }}" {{ (string) $currentBranchId === (string) $branch->id ? 'selected' : '' }}>
@@ -162,24 +224,24 @@
                     </select>
                 </form>
             @elseif ($branches->isNotEmpty())
-                <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 sm:px-3 py-1 bg-slate-50 border border-slate-200 text-xs sm:text-sm font-medium text-slate-600">
-                    <i class="fas fa-location-dot text-xs text-slate-400"></i>
-                    <span class="max-w-[90px] sm:max-w-[200px] truncate">{{ session('branch_name', 'No Branch') }}</span>
+                <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-slate-50 border border-slate-200 text-xs font-medium text-slate-600">
+                    <i class="fas fa-location-dot text-[0.65rem] text-slate-400"></i>
+                    <span class="max-w-[80px] sm:max-w-[180px] truncate">{{ session('branch_name', 'No Branch') }}</span>
                 </span>
             @endif
 
-            {{-- Notification bell --}}
+            {{-- Notification bell — refined circle button --}}
             <div class="dropdown">
                 <button type="button"
-                        class="relative flex items-center justify-center w-9 h-9 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 active:bg-slate-200 transition-all"
+                        class="rc-notif-btn"
                         title="Notifications"
                         id="notifDropdownBtn"
                         data-bs-toggle="dropdown"
                         aria-expanded="false">
-                    <i class="fas fa-bell text-base"></i>
+                    <i class="fas fa-bell" style="font-size:0.9rem;"></i>
                     <span id="notifBadge"
-                          class="absolute -top-0.5 -right-0.5 flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white font-bold leading-none notif-pulse"
-                          style="display:none; font-size:0.5rem;">0</span>
+                          class="absolute -top-1 -right-1 flex items-center justify-center w-[18px] h-[18px] rounded-full bg-red-500 text-white font-bold leading-none notif-pulse"
+                          style="display:none; font-size:0.55rem;">0</span>
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end"
                     aria-labelledby="notifDropdownBtn"
@@ -211,27 +273,23 @@
                 </ul>
             </div>
 
-            {{-- User avatar + dropdown --}}
+            {{-- User avatar + dropdown — clean pill button --}}
             <div class="dropdown">
                 <button type="button"
-                        class="flex items-center gap-2 rounded-lg pl-1.5 pr-3 py-1.5 hover:bg-slate-100 active:bg-slate-200 transition-all"
+                        class="rc-user-btn"
                         data-bs-toggle="dropdown"
                         aria-expanded="false">
-                    <span class="flex items-center justify-center w-8 h-8 rounded-full bg-indigo-500 text-white text-xs font-bold shadow-sm shadow-indigo-200">
-                        {{ $initials }}
-                    </span>
-                    <span class="hidden sm:inline text-sm font-medium text-slate-700 max-w-[100px] truncate">{{ $userName }}</span>
-                    <i class="fas fa-chevron-down text-[0.55rem] text-slate-400 hidden sm:inline"></i>
+                    <span class="rc-user-avatar">{{ $initials }}</span>
+                    <span class="hidden sm:inline text-sm font-medium text-slate-700 max-w-[90px] truncate">{{ $userName }}</span>
+                    <i class="fas fa-chevron-down text-[0.5rem] text-slate-400 hidden sm:inline"></i>
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end" style="min-width: 220px;">
-                    <li class="dropdown-item-text px-3 py-2">
+                    <li class="dropdown-item-text px-3 py-2.5">
                         <div class="flex items-center gap-3">
-                            <span class="flex items-center justify-center w-10 h-10 rounded-full bg-indigo-500 text-white text-sm font-bold shadow shadow-indigo-200">
-                                {{ $initials }}
-                            </span>
+                            <span class="rc-user-avatar" style="width:38px;height:38px;font-size:0.8rem;">{{ $initials }}</span>
                             <div class="min-w-0">
                                 <div class="font-semibold text-sm text-slate-800 truncate">{{ $employeeName ?: $userName }}</div>
-                                <div class="text-xs text-slate-500">{{ $roleCfg['label'] }}</div>
+                                <div class="text-xs text-slate-500 mt-0.5">{{ $roleCfg['label'] }}</div>
                             </div>
                         </div>
                     </li>
