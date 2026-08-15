@@ -1,15 +1,11 @@
 {{--
   x-erp.top-nav — Minimal clean top navigation bar
 
-  Simple & clean design:
-    - White background with subtle bottom border
-    - Left: hamburger (mobile only)
-    - Right: role badge | branch | notification bell | user dropdown
-    - Brand name lives in sidebar only — removed from top bar
+  Layout:
+    Mobile:  [☰ hamburger] [role badge]  ···  [branch code] [🔔] [avatar]
+    Desktop: [role badge] [branch full]  ···  [🔔] [avatar+name▾]
 
-  Usage:
-    <x-erp.top-nav />
-    <x-erp.top-nav :tabs="$tabs" />
+  Brand name lives in sidebar only.
 --}}
 @props([
     'tabs' => null,
@@ -22,15 +18,15 @@
 
     $role = auth()->user()?->getRole() ?? 'user';
     $roleMap = [
-        'admin'            => ['label' => 'Admin',            'color' => 'rose'],
-        'superadmin'       => ['label' => 'Super Admin',      'color' => 'pink'],
-        'manager'          => ['label' => 'Manager',          'color' => 'cyan'],
-        'sales_manager'    => ['label' => 'Sales Manager',    'color' => 'amber'],
-        'warehouse_manager'=> ['label' => 'Warehouse Manager', 'color' => 'orange'],
-        'dispatcher'       => ['label' => 'Dispatcher',       'color' => 'violet'],
-        'accountant'       => ['label' => 'Accountant',       'color' => 'emerald'],
+        'admin'            => ['label' => 'Admin',       'short' => 'Admin',  'color' => 'rose'],
+        'superadmin'       => ['label' => 'Super Admin', 'short' => 'SA',     'color' => 'pink'],
+        'manager'          => ['label' => 'Manager',     'short' => 'Mgr',    'color' => 'cyan'],
+        'sales_manager'    => ['label' => 'Sales Mgr',   'short' => 'SM',     'color' => 'amber'],
+        'warehouse_manager'=> ['label' => 'WH Mgr',      'short' => 'WH',     'color' => 'orange'],
+        'dispatcher'       => ['label' => 'Dispatcher',  'short' => 'Disp',   'color' => 'violet'],
+        'accountant'       => ['label' => 'Accountant',  'short' => 'Acct',   'color' => 'emerald'],
     ];
-    $roleCfg = $roleMap[$role] ?? ['label' => ucfirst($role), 'color' => 'slate'];
+    $roleCfg = $roleMap[$role] ?? ['label' => ucfirst($role), 'short' => strtoupper(substr($role,0,2)), 'color' => 'slate'];
 
     $canSwitchBranch = in_array($role, ['admin', 'superadmin', 'manager']);
 
@@ -49,123 +45,109 @@
     }
     .notif-pulse { animation: notifPulse 2s ease-in-out infinite; }
 
-    /* ── Top nav bar: clean white ── */
+    /* ── Top nav bar ── */
     .rc-topnav {
         background: #ffffff;
         border-bottom: 1px solid #e2e8f0;
     }
-
-    /* ── Hamburger: mobile-only, clean circle button ── */
-    .rc-hamburger {
+    .rc-topnav-inner {
         display: flex;
         align-items: center;
+        justify-content: space-between;
+        height: 52px;
+        padding: 0 12px;
+        overflow: hidden;          /* prevent right-side overflow */
+    }
+    @media (min-width: 640px) {
+        .rc-topnav-inner { padding: 0 20px; height: 54px; }
+    }
+
+    /* ── Hamburger: mobile-only ── */
+    .rc-hamburger {
+        display: none;              /* hidden by default (desktop) */
+        align-items: center;
         justify-content: center;
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
         border: none;
         background: transparent;
         color: #475569;
         cursor: pointer;
-        transition: all 0.2s ease;
+        transition: background 0.15s ease, color 0.15s ease;
+        -webkit-tap-highlight-color: transparent;  /* kill blue flash on mobile */
+        outline: none;
+        flex-shrink: 0;
     }
-    .rc-hamburger:hover {
-        background: #f1f5f9;
-        color: #1e293b;
-    }
-    .rc-hamburger:active {
-        background: #e2e8f0;
-        transform: scale(0.92);
+    .rc-hamburger:hover { background: #f1f5f9; color: #1e293b; }
+    .rc-hamburger:active { background: #e2e8f0; }
+    @media (max-width: 991.98px) {
+        .rc-hamburger { display: flex; }
     }
 
-    /* ── Notification bell: refined circle with border ── */
+    /* ── Notification bell ── */
     .rc-notif-btn {
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 38px;
-        height: 38px;
+        width: 34px;
+        height: 34px;
         border-radius: 50%;
-        border: 1.5px solid #e2e8f0;
+        border: 1px solid #e2e8f0;
         background: #ffffff;
         color: #64748b;
         cursor: pointer;
-        transition: all 0.2s ease;
+        transition: all 0.15s ease;
         position: relative;
+        flex-shrink: 0;
+        -webkit-tap-highlight-color: transparent;
+        outline: none;
     }
-    .rc-notif-btn:hover {
-        border-color: #c7d2fe;
-        background: #f5f3ff;
-        color: #6366f1;
-    }
-    .rc-notif-btn:active {
-        background: #ede9fe;
-        transform: scale(0.92);
-    }
+    .rc-notif-btn:hover { border-color: #c7d2fe; background: #f5f3ff; color: #6366f1; }
+    .rc-notif-btn:active { background: #ede9fe; }
 
-    /* ── User avatar button: clean pill shape ── */
+    /* ── User avatar button ── */
     .rc-user-btn {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 4px 12px 4px 4px;
+        gap: 6px;
+        padding: 3px 10px 3px 3px;
         border-radius: 100px;
-        border: 1.5px solid #e2e8f0;
+        border: 1px solid #e2e8f0;
         background: #ffffff;
         cursor: pointer;
-        transition: all 0.2s ease;
-    }
-    .rc-user-btn:hover {
-        border-color: #c7d2fe;
-        background: #f5f3ff;
-    }
-    .rc-user-btn:active {
-        background: #ede9fe;
-    }
-    .rc-user-avatar {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
-        background: #6366f1;
-        color: #ffffff;
-        font-size: 0.7rem;
-        font-weight: 700;
+        transition: all 0.15s ease;
         flex-shrink: 0;
+        -webkit-tap-highlight-color: transparent;
+        outline: none;
+    }
+    .rc-user-btn:hover { border-color: #c7d2fe; background: #f5f3ff; }
+    .rc-user-btn:active { background: #ede9fe; }
+    .rc-user-avatar {
+        display: flex; align-items: center; justify-content: center;
+        width: 28px; height: 28px; border-radius: 50%;
+        background: #6366f1; color: #fff; font-size: 0.65rem; font-weight: 700; flex-shrink: 0;
     }
 
-    /* ── Dropdown theme: light, crisp ── */
+    /* ── Dropdown theme ── */
     .rc-topnav .dropdown-menu {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
+        background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;
         box-shadow: 0 10px 40px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
-        color: #334155;
-        padding: 6px;
+        color: #334155; padding: 6px;
     }
     .rc-topnav .dropdown-menu .dropdown-item {
-        color: #475569;
-        border-radius: 8px;
-        padding: 8px 12px;
-        font-size: 0.875rem;
-        transition: all 0.15s ease;
+        color: #475569; border-radius: 8px; padding: 8px 12px; font-size: 0.875rem; transition: all 0.15s ease;
     }
     .rc-topnav .dropdown-menu .dropdown-item:hover,
-    .rc-topnav .dropdown-menu .dropdown-item:focus {
-        background: #f1f5f9;
-        color: #1e293b;
-    }
+    .rc-topnav .dropdown-menu .dropdown-item:focus { background: #f1f5f9; color: #1e293b; }
     .rc-topnav .dropdown-menu .dropdown-item-text { color: #334155; }
     .rc-topnav .dropdown-menu .dropdown-divider { border-color: #e2e8f0; margin: 4px 8px; }
     .rc-topnav .dropdown-menu .dropdown-header { color: #64748b; }
     .rc-topnav .dropdown-menu .text-muted { color: #94a3b8 !important; }
     .rc-topnav .dropdown-menu small { color: #94a3b8; }
-
     .rc-topnav select option { background: #ffffff; color: #1e293b; }
 
-    /* ── Role badge colors (light mode) ── */
+    /* ── Role badge colors ── */
     .rc-role-rose    { background: #fff1f2; color: #e11d48; border: 1px solid #fecdd3; }
     .rc-role-pink    { background: #fdf2f8; color: #db2777; border: 1px solid #fbcfe8; }
     .rc-role-cyan    { background: #ecfeff; color: #0891b2; border: 1px solid #cffafe; }
@@ -174,47 +156,41 @@
     .rc-role-violet  { background: #f5f3ff; color: #7c3aed; border: 1px solid #ddd6fe; }
     .rc-role-emerald { background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; }
     .rc-role-slate   { background: #f8fafc; color: #475569; border: 1px solid #e2e8f0; }
-
-    /* ── Mobile only ── */
-    @media (min-width: 992px) {
-        .rc-mobile-only { display: none !important; }
-    }
-    @media (max-width: 991.98px) {
-        .rc-mobile-only { display: flex !important; }
-    }
 </style>
 
 {{-- ==================== STICKY TOP NAV ==================== --}}
 <div class="rc-topnav sticky top-0 z-50 no-print">
-    <div class="px-4 sm:px-6 h-[56px] flex items-center justify-between">
+    <div class="rc-topnav-inner">
 
-        {{-- LEFT: hamburger (mobile ONLY) --}}
-        <div class="flex items-center">
+        {{-- ═══ LEFT: hamburger (mobile) + role badge ═══ --}}
+        <div class="flex items-center gap-2 min-w-0 flex-shrink-0">
+            {{-- Hamburger — mobile only, no blue flash --}}
             <button type="button"
-                    class="rc-hamburger rc-mobile-only"
+                    class="rc-hamburger"
                     onclick="toggleSidebar()"
                     aria-label="Toggle menu">
-                <i class="fas fa-bars" style="font-size:1.05rem;"></i>
+                <i class="fas fa-bars" style="font-size:1rem;"></i>
             </button>
+
+            {{-- Role badge — short on mobile, full on sm+ --}}
+            <span class="rc-role-{{ $roleCfg['color'] }} inline-flex items-center gap-1 font-semibold text-[0.65rem] sm:text-xs rounded-full px-2 sm:px-2.5 py-0.5 sm:py-1 select-none whitespace-nowrap">
+                <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60 hidden sm:inline-block"></span>
+                <span class="sm:hidden">{{ $roleCfg['short'] }}</span>
+                <span class="hidden sm:inline">{{ $roleCfg['label'] }}</span>
+            </span>
         </div>
 
-        {{-- RIGHT: role → branch → notification → user --}}
-        <div class="flex items-center gap-2.5 sm:gap-3 ml-auto">
+        {{-- ═══ RIGHT: branch → bell → avatar ═══ --}}
+        <div class="flex items-center gap-2 sm:gap-2.5 ml-auto flex-shrink-0">
 
-            {{-- Role badge --}}
-            <span class="rc-role-{{ $roleCfg['color'] }} inline-flex items-center gap-1.5 font-semibold text-xs rounded-full px-2.5 py-1 transition-colors select-none">
-                <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span>
-                {{ $roleCfg['label'] }}
-            </span>
-
-            {{-- Branch selector --}}
+            {{-- Branch selector — compact on mobile --}}
             @if ($canSwitchBranch && $branches->isNotEmpty())
                 <form method="POST" action="{{ route('branch.switch') }}"
-                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-slate-50 border border-slate-200 hover:border-slate-300 transition-colors">
+                      class="inline-flex items-center gap-1 rounded-full px-2 sm:px-2.5 py-0.5 sm:py-1 bg-slate-50 border border-slate-200 hover:border-slate-300 transition-colors">
                     @csrf
-                    <i class="fas fa-location-dot text-[0.65rem] text-slate-400"></i>
+                    <i class="fas fa-location-dot text-[0.6rem] sm:text-[0.65rem] text-slate-400"></i>
                     <select name="branch_id" onchange="this.form.submit()"
-                            class="bg-transparent border-0 text-xs font-medium text-slate-600 outline-none cursor-pointer focus:ring-0 hover:text-slate-800 transition-colors max-w-[80px] sm:max-w-[180px] truncate"
+                            class="bg-transparent border-0 text-[0.65rem] sm:text-xs font-medium text-slate-600 outline-none cursor-pointer focus:ring-0 hover:text-slate-800 transition-colors max-w-[60px] sm:max-w-[160px] truncate"
                             aria-label="Switch branch">
                         @foreach ($branches as $branch)
                             <option value="{{ $branch->id }}" {{ (string) $currentBranchId === (string) $branch->id ? 'selected' : '' }}>
@@ -224,13 +200,13 @@
                     </select>
                 </form>
             @elseif ($branches->isNotEmpty())
-                <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 bg-slate-50 border border-slate-200 text-xs font-medium text-slate-600">
-                    <i class="fas fa-location-dot text-[0.65rem] text-slate-400"></i>
-                    <span class="max-w-[80px] sm:max-w-[180px] truncate">{{ session('branch_name', 'No Branch') }}</span>
+                <span class="inline-flex items-center gap-1 rounded-full px-2 sm:px-2.5 py-0.5 sm:py-1 bg-slate-50 border border-slate-200 text-[0.65rem] sm:text-xs font-medium text-slate-600 max-w-[80px] sm:max-w-[180px] truncate">
+                    <i class="fas fa-location-dot text-[0.6rem] text-slate-400"></i>
+                    {{ session('branch_name', 'No Branch') }}
                 </span>
             @endif
 
-            {{-- Notification bell — refined circle button --}}
+            {{-- Notification bell --}}
             <div class="dropdown">
                 <button type="button"
                         class="rc-notif-btn"
@@ -238,14 +214,14 @@
                         id="notifDropdownBtn"
                         data-bs-toggle="dropdown"
                         aria-expanded="false">
-                    <i class="fas fa-bell" style="font-size:0.9rem;"></i>
+                    <i class="fas fa-bell" style="font-size:0.85rem;"></i>
                     <span id="notifBadge"
-                          class="absolute -top-1 -right-1 flex items-center justify-center w-[18px] h-[18px] rounded-full bg-red-500 text-white font-bold leading-none notif-pulse"
-                          style="display:none; font-size:0.55rem;">0</span>
+                          class="absolute -top-1 -right-1 flex items-center justify-center w-[16px] h-[16px] rounded-full bg-red-500 text-white font-bold leading-none notif-pulse"
+                          style="display:none; font-size:0.5rem;">0</span>
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end"
                     aria-labelledby="notifDropdownBtn"
-                    style="min-width: 320px; max-height: 400px; overflow-y: auto;">
+                    style="min-width: 280px; max-width: 340px; max-height: 400px; overflow-y: auto;">
                     <li class="dropdown-header d-flex justify-content-between align-items-center">
                         <strong class="text-slate-700"><i class="fas fa-bell me-1.5 text-indigo-500"></i>Notifications</strong>
                         <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none text-indigo-500 hover:text-indigo-700"
@@ -273,20 +249,20 @@
                 </ul>
             </div>
 
-            {{-- User avatar + dropdown — clean pill button --}}
+            {{-- User avatar — just circle on mobile, pill with name on sm+ --}}
             <div class="dropdown">
                 <button type="button"
                         class="rc-user-btn"
                         data-bs-toggle="dropdown"
                         aria-expanded="false">
                     <span class="rc-user-avatar">{{ $initials }}</span>
-                    <span class="hidden sm:inline text-sm font-medium text-slate-700 max-w-[90px] truncate">{{ $userName }}</span>
-                    <i class="fas fa-chevron-down text-[0.5rem] text-slate-400 hidden sm:inline"></i>
+                    <span class="hidden sm:inline text-sm font-medium text-slate-700 max-w-[80px] truncate">{{ $userName }}</span>
+                    <i class="fas fa-chevron-down text-[0.45rem] text-slate-400 hidden sm:inline"></i>
                 </button>
-                <ul class="dropdown-menu dropdown-menu-end" style="min-width: 220px;">
+                <ul class="dropdown-menu dropdown-menu-end" style="min-width: 200px;">
                     <li class="dropdown-item-text px-3 py-2.5">
                         <div class="flex items-center gap-3">
-                            <span class="rc-user-avatar" style="width:38px;height:38px;font-size:0.8rem;">{{ $initials }}</span>
+                            <span class="rc-user-avatar" style="width:36px;height:36px;font-size:0.75rem;">{{ $initials }}</span>
                             <div class="min-w-0">
                                 <div class="font-semibold text-sm text-slate-800 truncate">{{ $employeeName ?: $userName }}</div>
                                 <div class="text-xs text-slate-500 mt-0.5">{{ $roleCfg['label'] }}</div>
@@ -315,7 +291,7 @@
 
     {{-- Optional tab strip --}}
     @isset($tabs)
-        <div class="flex flex-wrap gap-1.5 overflow-x-auto px-4 sm:px-6 pb-2.5 -mt-1">
+        <div class="flex flex-wrap gap-1.5 overflow-x-auto px-3 sm:px-5 pb-2 -mt-1">
             @foreach ($tabs as $tab)
                 @php
                     $isActive = !empty($tab['active']);
@@ -323,7 +299,7 @@
                         ? 'bg-indigo-50 text-indigo-600 border-indigo-200'
                         : 'bg-slate-50 text-slate-500 border-slate-200 hover:text-slate-700 hover:border-slate-300 hover:bg-slate-100';
                 @endphp
-                <a href="{{ $tab['href'] }}" class="{{ $tabClass }} rounded-full px-3 py-1 text-xs font-medium border whitespace-nowrap transition-all">
+                <a href="{{ $tab['href'] }}" class="{{ $tabClass }} rounded-full px-2.5 py-0.5 text-[0.65rem] font-medium border whitespace-nowrap transition-all">
                     {{ $tab['label'] }}
                 </a>
             @endforeach
@@ -333,7 +309,7 @@
 
 {{-- ==================== NOTIFICATION TOAST + AUDIO ==================== --}}
 <div id="notificationContainer" aria-live="polite" aria-atomic="true"
-     style="position:fixed; top:70px; right:20px; z-index:1080; max-width:360px;"></div>
+     style="position:fixed; top:60px; right:12px; z-index:1080; max-width:340px;"></div>
 <audio id="notificationSound" preload="none" style="display:none;"></audio>
 
 @push('scripts')

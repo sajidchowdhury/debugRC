@@ -121,10 +121,10 @@
         @media (max-width: 991.98px) {
             #sidebar {
                 position: fixed !important;
-                top: 56px;                                /* below sticky top-nav */
+                top: 52px;                                /* below sticky top-nav */
                 left: -280px;                            /* off-screen left */
                 bottom: 0;
-                height: calc(100vh - 56px) !important;
+                height: calc(100vh - 52px) !important;
                 width: 260px;
                 z-index: 1060;
                 transition: left 0.3s ease;
@@ -136,7 +136,7 @@
             }
             #sidebarOverlay {
                 position: fixed;
-                top: 56px;                               /* below top-nav */
+                top: 52px;                               /* below top-nav */
                 left: 0;
                 right: 0;
                 bottom: 0;
@@ -162,10 +162,10 @@
         @media (min-width: 992px) {
             #sidebar {
                 position: fixed !important;
-                top: 56px;                                /* below sticky top-nav */
+                top: 52px;                                /* below sticky top-nav */
                 left: 0;
                 bottom: 0;
-                height: calc(100vh - 56px) !important;
+                height: calc(100vh - 52px) !important;
                 width: 260px;
                 z-index: 40;                             /* below top-nav z-50 */
             }

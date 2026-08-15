@@ -47,7 +47,7 @@
             border-right: 1px solid #e2e8f0;
             width: 264px;
             position: fixed !important;
-            top: 56px;
+            top: 52px;
             left: 0;
             z-index: 40 !important;
             overflow-y: auto;
@@ -137,18 +137,18 @@
 
         /* ===== MOBILE DRAWER ===== */
         @media (max-width: 991.98px) {
-            #sidebar { position: fixed !important; top: 56px; left: -280px; bottom: 0; height: calc(100vh - 56px) !important; width: 264px; z-index: 1060; box-shadow: 4px 0 20px rgba(0,0,0,0.08); transition: left 0.3s cubic-bezier(0.4,0,0.2,1); }
+            #sidebar { position: fixed !important; top: 52px; left: -280px; bottom: 0; height: calc(100vh - 52px) !important; width: 264px; z-index: 1060; box-shadow: 4px 0 20px rgba(0,0,0,0.08); transition: left 0.3s cubic-bezier(0.4,0,0.2,1); }
             #sidebar.active { left: 0; }
             #sidebar.collapsed { width: 264px !important; }
             #sidebar.collapsed .logo-text, #sidebar.collapsed .nav-link span, #sidebar.collapsed .sidebar-toggle .fa-chevron-down, #sidebar.collapsed .submenu { display: initial !important; }
-            #sidebarOverlay { position: fixed; top: 56px; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,0.3); backdrop-filter: blur(4px); z-index: 1055; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+            #sidebarOverlay { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,0.3); backdrop-filter: blur(4px); z-index: 1055; opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
             #sidebarOverlay.active { opacity: 1; pointer-events: auto; }
             #mainContent { margin-left: 0 !important; width: 100% !important; }
         }
 
         /* ===== DESKTOP ===== */
         @media (min-width: 992px) {
-            #sidebar { height: calc(100vh - 56px) !important; }
+            #sidebar { height: calc(100vh - 52px) !important; }
             #mainContent { margin-left: 264px !important; width: calc(100% - 264px) !important; max-width: none !important; transition: margin-left 0.3s cubic-bezier(0.4,0,0.2,1), width 0.3s cubic-bezier(0.4,0,0.2,1); }
             #mainContent.sidebar-collapsed { margin-left: 64px !important; width: calc(100% - 64px) !important; }
         }
