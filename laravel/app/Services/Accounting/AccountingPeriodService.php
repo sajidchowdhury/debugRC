@@ -2,8 +2,11 @@
 
 namespace App\Services\Accounting;
 
+use App\Exceptions\YearEndCloseException;
+use App\Models\FiscalYear;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\SubLedgerService;
+use App\Services\DatabaseBackupService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
@@ -30,7 +33,8 @@ class AccountingPeriodService
 {
     public function __construct(
         private JournalPostingService $postingService,
-        private SubLedgerService $subLedgerService
+        private SubLedgerService $subLedgerService,
+        private DatabaseBackupService $databaseBackupService
     ) {}
 
     /**
@@ -269,10 +273,47 @@ SQL, [$closeThroughDate])->cnt;
      * @param string $yearEndDate (Y-m-d, typically Dec 31)
      * @param int $closedBy
      * @return array{ status: string, journal_entry_id: int|null, net_profit: float, income_total: float, expense_total: float }
+     * @throws \App\Exceptions\YearEndCloseException If no fresh verified backup exists for the fiscal year containing $yearEndDate.
      * @throws \RuntimeException If period not closed through year-end or ledgers not found.
      */
     public function yearEndClose(int $branchId, string $yearEndDate, int $closedBy): array
     {
+        // ── Session 3 — Backup-on-file gate ──────────────────────────
+        // This gate runs FIRST, before any of the existing 5 pre-flight
+        // checks, so a missing backup fails fast without doing the
+        // heavier reconciliation work. The gate is the hard guarantee
+        // that the client's "auto-backup DB file to PC on FY close"
+        // requirement is met — close cannot proceed without a fresh,
+        // verified pg_dump -Fc file on disk.
+        //
+        // Resolve the fiscal year containing the year-end date. We use
+        // the FiscalYear model's forDate scope (which queries the
+        // fiscal_years table for the row whose start_date <= date AND
+        // end_date >= date). If no FY covers the date, we throw — the
+        // accountant must create one first.
+        $fy = FiscalYear::forDate($yearEndDate)->first();
+        if (!$fy) {
+            throw new YearEndCloseException(
+                "No fiscal year covers the year-end date {$yearEndDate}. "
+                . "Create and activate a fiscal year for this date range first.",
+                null
+            );
+        }
+
+        if (!$this->databaseBackupService->isBackupFresh($fy->id)) {
+            $latest = $this->databaseBackupService->latestBackupForFiscalYear($fy->id);
+            $detail = $latest
+                ? "Latest backup is from {$latest->created_at->format('Y-m-d H:i')} "
+                  . "(older than ".config('backup.freshness_hours', 24)." hours or verification failed)."
+                : 'No verified backup exists for this fiscal year.';
+            throw new YearEndCloseException(
+                "No fresh verified database backup on file for fiscal year #{$fy->id} ({$fy->fiscal_year_code}). "
+                . "Run `php artisan db:backup-year-end --fiscal-year={$fy->id}` first. "
+                . $detail,
+                $fy->id
+            );
+        }
+
         // 1. Verify the period is closed through the year-end date.
         $closedThrough = $this->getClosedThroughDate($branchId);
         if (!$closedThrough || $closedThrough < $yearEndDate) {
@@ -466,6 +507,35 @@ SQL, [$branchId, $yearEndDate]);
             'passed' => $pendingReversals === 0,
             'detail' => $pendingReversals === 0 ? 'All clean' : "{$pendingReversals} pending",
         ];
+
+        // 5. Session 3 — Fresh verified database backup on file.
+        // This is the gate that ABORTS yearEndClose() if no fresh
+        // backup exists. The checklist shows it as a red/green item
+        // so the accountant can see at a glance whether they need
+        // to run `php artisan db:backup-year-end` first.
+        $fy = FiscalYear::forDate($yearEndDate)->first();
+        if ($fy) {
+            $latest = $this->databaseBackupService->latestBackupForFiscalYear($fy->id);
+            $isFresh = $this->databaseBackupService->isBackupFresh($fy->id);
+            $checks[] = [
+                'label' => 'Database backup on file (≤ '.config('backup.freshness_hours', 24).'h old, SHA-256 verified)',
+                'passed' => $isFresh,
+                'detail' => $latest
+                    ? ($isFresh
+                        ? 'Backup #'.$latest->id.' — '.$latest->created_at->format('Y-m-d H:i')
+                          . ' ('.number_format($latest->file_size_bytes / 1024 / 1024, 1).' MB)'
+                        : 'Backup #'.$latest->id.' exists but is STALE or verification failed — '
+                          . 'run `php artisan db:backup-year-end --fiscal-year='.$fy->id.'`'
+                      )
+                    : 'No backup exists — run `php artisan db:backup-year-end --fiscal-year='.$fy->id.'`',
+            ];
+        } else {
+            $checks[] = [
+                'label' => 'Database backup on file',
+                'passed' => false,
+                'detail' => 'No fiscal year covers '.$yearEndDate.' — create one first',
+            ];
+        }
 
         return [
             'can_close' => collect($checks)->every(fn($c) => $c['passed']),
