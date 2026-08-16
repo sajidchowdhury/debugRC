@@ -1,0 +1,48 @@
+/* ============================================================
+ * Branch P&L Report — Session 8 styling
+ *
+ * Mostly uses Bootstrap 5 utility classes (table-sm, table-striped,
+ * text-end, badges). This file adds a few small polish rules for
+ * the summary cards and the per-demand table.
+ * ============================================================ */
+
+/* Summary card hover effect — subtle elevation */
+.card.summary-card:hover {
+    transform: translateY(-1px);
+    transition: transform 0.15s ease-in-out;
+}
+
+/* Per-demand table: highlight the Net P&L column */
+table.table-branch-pnl td:nth-child(9),
+table.table-branch-pnl th:nth-child(9) {
+    font-weight: 600;
+}
+
+/* Override count badge — slightly larger + rounded-pill */
+.badge.override-count {
+    font-size: 0.75em;
+    padding: 0.35em 0.6em;
+    border-radius: 0.25rem;
+}
+
+/* Drilldown table: classification badges uniform width */
+td .badge {
+    min-width: 60px;
+    text-align: center;
+}
+
+/* Print-friendly: hide filter form + action buttons when printing */
+@media print {
+    .card-header,
+    .btn,
+    form {
+        display: none !important;
+    }
+    .container-fluid {
+        padding: 0;
+    }
+    .card {
+        border: 1px solid #ccc !important;
+        box-shadow: none !important;
+    }
+}
