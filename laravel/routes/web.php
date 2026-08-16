@@ -35,6 +35,7 @@ use App\Http\Controllers\Admin\PurchaseAuditController;
 use App\Http\Controllers\Admin\CommissionRuleController;
 use App\Http\Controllers\Admin\SalesCartController;
 use App\Http\Controllers\Admin\SalesInvoiceController;
+use App\Http\Controllers\Admin\SalesBelowMinApprovalController;
 use App\Http\Controllers\Admin\SalesChallanController;
 use App\Http\Controllers\Admin\CustomerPaymentController;
 use App\Http\Controllers\Admin\SupplierTransactionController;
@@ -1232,6 +1233,27 @@ Route::middleware('auth')->group(function () {
     Route::post('admin/sales/finalize', [SalesInvoiceController::class, 'finalize'])
         ->name('admin.sales.finalize')
         ->middleware('role:salesman,manager,admin');
+
+    // ============================================================
+    // Session 6 — Below-Min Admin Override Workflow
+    // POST /admin/sales/below-min-approvals: approve a below-min rate
+    //   (re-authenticates the approver, writes a user_audit_log row,
+    //   returns the audit_log_id which the JS passes to /cart/add).
+    // GET  /admin/sales/below-min-approvals: list recent approvals
+    //   for the branch (audit dashboard).
+    //
+    // RBAC: salesman/manager/admin can hit POST (the cashier calls it
+    // from the cart page), but the BODY carries the approver's
+    // username+password which is re-checked fresh. So a salesman can
+    // submit the request, but only an admin/manager's credentials
+    // will succeed. GET is admin/manager only (audit read).
+    // ============================================================
+    Route::post('admin/sales/below-min-approvals', [SalesBelowMinApprovalController::class, 'store'])
+        ->name('admin.sales.below-min-approvals.store')
+        ->middleware('role:salesman,manager,admin');
+    Route::get('admin/sales/below-min-approvals', [SalesBelowMinApprovalController::class, 'index'])
+        ->name('admin.sales.below-min-approvals.index')
+        ->middleware('role:admin,manager');
 
     // Phase 8.2: cart-data + credit-check are GET endpoints (read-only).
     // Pulled out of the admin/sales group above (same as finalize) so
