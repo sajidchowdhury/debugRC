@@ -30,6 +30,10 @@ class SalesInvoiceItem extends Model
     protected $fillable = [
         'sales_invoice_id', 'product_id', 'warehouse_id',
         'qty', 'rate',
+        // Session 5: price + cost snapshots + classification.
+        'price_min', 'price_max', 'price_default',
+        'cost_rate', 'price_classification',
+        'branch_demand_item_id', 'below_min_override_id',
     ];
 
     protected $casts = [
@@ -39,6 +43,13 @@ class SalesInvoiceItem extends Model
         'sales_invoice_id' => 'integer',
         'product_id' => 'integer',
         'warehouse_id' => 'integer',
+        // Session 5: numeric snapshots.
+        'price_min' => 'decimal:2',
+        'price_max' => 'decimal:2',
+        'price_default' => 'decimal:2',
+        'cost_rate' => 'decimal:4',
+        'branch_demand_item_id' => 'integer',
+        'below_min_override_id' => 'integer',
     ];
 
     public function invoice(): \Illuminate\Database\Eloquent\Relations\BelongsTo
