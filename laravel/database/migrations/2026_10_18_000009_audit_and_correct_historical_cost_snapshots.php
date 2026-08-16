@@ -96,6 +96,17 @@ return new class extends Migration
         //
         // The audit is logged for traceability — the dev team / DBA
         // can review which sale lines were affected and by how much.
+        //
+        // NOTE on FILTER clause syntax: PostgreSQL requires
+        //   aggregate_function(args) FILTER (WHERE ...)
+        // — the FILTER clause must come IMMEDIATELY after the aggregate
+        // function's closing paren, BEFORE any cast (::numeric). An
+        // earlier draft had `AVG(x)::numeric FILTER (WHERE ...)` which
+        // parses as `(AVG(x)::numeric) FILTER (...)` — invalid, because
+        // FILTER only attaches to an aggregate, not to a cast expression.
+        // The fix is to wrap the FILTER-modified aggregate in parens,
+        // then apply the cast to the parenthesized result:
+        //   (AVG(x) FILTER (WHERE ...))::numeric
         $audit = DB::selectOne(<<<SQL
 SELECT
     COUNT(*) AS total_linked_rows,
@@ -106,8 +117,9 @@ SELECT
         MAX(ABS(sii.cost_rate - bdi.cost_rate))::numeric, 4
     ) AS max_delta,
     ROUND(
-        AVG(ABS(sii.cost_rate - bdi.cost_rate))::numeric
-            FILTER (WHERE ABS(sii.cost_rate - bdi.cost_rate) > 0.01),
+        (AVG(ABS(sii.cost_rate - bdi.cost_rate))
+            FILTER (WHERE ABS(sii.cost_rate - bdi.cost_rate) > 0.01)
+        )::numeric,
         4
     ) AS avg_delta_among_wrong
 FROM sales_invoice_items AS sii
