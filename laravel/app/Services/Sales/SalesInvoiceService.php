@@ -12,7 +12,9 @@ use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
+use App\Services\BranchDemand\BranchDemandService;
 use App\Services\Notification\NotificationService;
+use App\Support\PriceClassifier;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -53,7 +55,8 @@ class SalesInvoiceService
         private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
-        private NotificationService $notifications
+        private NotificationService $notifications,
+        private BranchDemandService $branchDemandService
     ) {}
 
     /**
@@ -204,15 +207,64 @@ class SalesInvoiceService
             ]);
 
             // Step 6: Create sales_invoice_items (warehouse_id=NULL — assigned at godown).
+            //
+            // Session 5: populate price_min/max/default + cost_rate +
+            // price_classification snapshots. The cart's items_json
+            // already carries min_rate/max_rate/default_rate (set by
+            // SalesCartService::addItem() from product_price_history).
+            // For cost_rate, we look up the active (FIFO oldest open)
+            // branch_demand_items row for this product in this branch
+            // via BranchDemandService::getActiveCostRate(); if none
+            // exists (direct supplier purchase), fall back to
+            // products.purchase_rate. If both are NULL, leave cost_rate
+            // NULL — the report will mark the line as "cost unknown".
+            $productIds = collect($items)->pluck('product_id')->unique()->all();
+            $productCosts = [];
+            if (!empty($productIds) && $branchId > 0) {
+                $productRows = DB::table('products')
+                    ->whereIn('id', $productIds)
+                    ->pluck('purchase_rate', 'id');
+                foreach ($productIds as $pid) {
+                    $demandCost = $this->branchDemandService->getActiveCostRate($branchId, (int) $pid);
+                    $productCosts[$pid] = $demandCost ?? (float) ($productRows[$pid] ?? 0);
+                }
+            }
+
             $itemRows = [];
             foreach ($items as $item) {
+                $productId = (int) $item['product_id'];
+                $rate      = (float) $item['rate'];
+                $priceMin  = isset($item['min_rate']) ? (float) $item['min_rate'] : null;
+                $priceMax  = isset($item['max_rate']) ? (float) $item['max_rate'] : null;
+                $priceDef  = isset($item['default_rate']) ? (float) $item['default_rate'] : null;
+                $costRate  = $productCosts[$productId] ?? null;
+
+                $classification = null;
+                if ($priceMin !== null && $priceMax !== null && $priceDef !== null) {
+                    $classification = PriceClassifier::classify(
+                        $rate,
+                        $priceMin,
+                        $priceMax,
+                        $priceDef,
+                        $costRate
+                    );
+                }
+
                 $itemRows[] = [
                     'sales_invoice_id' => $invoiceId,
-                    'product_id' => (int) $item['product_id'],
+                    'product_id' => $productId,
                     'warehouse_id' => null, // assigned at godown (Phase 8.3)
                     'qty' => (float) $item['qty'],
-                    'rate' => (float) $item['rate'],
+                    'rate' => $rate,
                     // G-160 (SALES-AUDIT-2): condition_state DROPPED — was always 'Good'.
+                    // Session 5: price + cost snapshots + classification.
+                    'price_min' => $priceMin,
+                    'price_max' => $priceMax,
+                    'price_default' => $priceDef,
+                    'cost_rate' => $costRate > 0 ? $costRate : null,
+                    'price_classification' => $classification,
+                    // branch_demand_item_id: populated in Session 7 (FIFO linkage).
+                    // below_min_override_id: populated in Session 6 (admin override).
                 ];
             }
             DB::table('sales_invoice_items')->insert($itemRows);
@@ -584,15 +636,61 @@ class SalesInvoiceService
             DB::table('sales_invoice_dispatchers')->where('sales_invoice_id', $invoiceId)->delete();
 
             // Step 4: INSERT new items.
+            //
+            // Session 5: same price + cost snapshot population as
+            // finalizeFromCart() above. On edit, the cart's items_json
+            // is re-enriched by SalesCartService::getCart() so the
+            // min_rate/max_rate/default_rate are current as of the edit
+            // date (NOT the original invoice date — this is intentional:
+            // an edit re-uses today's prices, not the historical ones.
+            // If the user wants to preserve historical prices on edit,
+            // they should not edit the invoice — they should issue a
+            // return + new invoice).
+            $productIds = collect($items)->pluck('product_id')->unique()->all();
+            $productCosts = [];
+            if (!empty($productIds) && $branchId > 0) {
+                $productRows = DB::table('products')
+                    ->whereIn('id', $productIds)
+                    ->pluck('purchase_rate', 'id');
+                foreach ($productIds as $pid) {
+                    $demandCost = $this->branchDemandService->getActiveCostRate($branchId, (int) $pid);
+                    $productCosts[$pid] = $demandCost ?? (float) ($productRows[$pid] ?? 0);
+                }
+            }
+
             $itemRows = [];
             foreach ($items as $item) {
+                $productId = (int) $item['product_id'];
+                $rate      = (float) $item['rate'];
+                $priceMin  = isset($item['min_rate']) ? (float) $item['min_rate'] : null;
+                $priceMax  = isset($item['max_rate']) ? (float) $item['max_rate'] : null;
+                $priceDef  = isset($item['default_rate']) ? (float) $item['default_rate'] : null;
+                $costRate  = $productCosts[$productId] ?? null;
+
+                $classification = null;
+                if ($priceMin !== null && $priceMax !== null && $priceDef !== null) {
+                    $classification = PriceClassifier::classify(
+                        $rate,
+                        $priceMin,
+                        $priceMax,
+                        $priceDef,
+                        $costRate
+                    );
+                }
+
                 $itemRows[] = [
                     'sales_invoice_id' => $invoiceId,
-                    'product_id' => (int) $item['product_id'],
+                    'product_id' => $productId,
                     'warehouse_id' => null, // reset to NULL — godown must re-assign after edit
                     'qty' => (float) $item['qty'],
-                    'rate' => (float) $item['rate'],
+                    'rate' => $rate,
                     // G-160 (SALES-AUDIT-2): condition_state DROPPED — was always 'Good'.
+                    // Session 5: price + cost snapshots + classification.
+                    'price_min' => $priceMin,
+                    'price_max' => $priceMax,
+                    'price_default' => $priceDef,
+                    'cost_rate' => $costRate > 0 ? $costRate : null,
+                    'price_classification' => $classification,
                 ];
             }
             DB::table('sales_invoice_items')->insert($itemRows);

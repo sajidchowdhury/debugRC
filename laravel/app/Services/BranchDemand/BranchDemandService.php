@@ -837,6 +837,63 @@ class BranchDemandService
         return $demand;
     }
 
+    /**
+     * Session 5 — Get the active (oldest open, FIFO) cost_rate for a
+     * product in a branch.
+     *
+     * Used by {@see \App\Services\Sales\SalesInvoiceService::finalizeFromCart()}
+     * to populate `sales_invoice_items.cost_rate` at finalize time. The
+     * cost_rate is the locked inter-branch transfer cost — the rate the
+     * SUPPLYING branch charged the SELLING branch when the goods were
+     * dispatched via a branch demand.
+     *
+     * FIFO logic: among all `branch_demand_items` rows where
+     *   - the demand's `to_branch_id` = $branchId (the branch that
+     *     received the goods — i.e., the selling branch in this context),
+     *   - the demand's `status` = 'received' (goods have been confirmed
+     *     as received by the selling branch),
+     *   - the product matches,
+     *   - the demand item still has un-consumed qty (best-effort — we
+     *     don't track consumption yet; that lands in Session 7 with the
+     *     FIFO linkage),
+     * we pick the OLDEST one (lowest demand_date, then lowest id) and
+     * return its `cost_rate`.
+     *
+     * Returns NULL when:
+     *   - No matching demand item exists (the product was sourced via a
+     *     direct supplier purchase, not an inter-branch transfer).
+     *   - The matching demand item has `cost_rate = 0` (rare; happens
+     *     when the supply branch's avg_cost was zero at send time).
+     *
+     * The caller (finalizeFromCart) falls back to `products.purchase_rate`
+     * when this returns NULL — the report still works, just with a less
+     * precise cost figure.
+     *
+     * @param  int      $branchId   The selling branch (demand's to_branch_id).
+     * @param  int      $productId  The product being sold.
+     * @return float|null           The locked cost_rate, or NULL if no
+     *                              matching open demand item exists.
+     */
+    public function getActiveCostRate(int $branchId, int $productId): ?float
+    {
+        $row = \Illuminate\Support\Facades\DB::table('branch_demand_items as bdi')
+            ->join('branch_demands as bd', 'bd.id', '=', 'bdi.branch_demand_id')
+            ->where('bd.to_branch_id', $branchId)
+            ->where('bd.status', 'received')
+            ->where('bdi.product_id', $productId)
+            ->where('bdi.cost_rate', '>', 0)
+            ->orderBy('bd.demand_date', 'asc')
+            ->orderBy('bdi.id', 'asc')
+            ->select('bdi.cost_rate')
+            ->first();
+
+        if (!$row) {
+            return null;
+        }
+
+        return (float) $row->cost_rate;
+    }
+
     // ===================== PRIVATE HELPERS =====================
 
     /**
