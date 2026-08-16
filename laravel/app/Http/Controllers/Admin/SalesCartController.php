@@ -243,6 +243,10 @@ class SalesCartController extends Controller
 
     /**
      * AJAX: Add a product to the cart.
+     *
+     * S6: accepts an optional `below_min_override_id` — the audit-log
+     * row id returned by /admin/sales/below-min-approvals. Required
+     * when the rate is below the product's min; ignored otherwise.
      */
     public function add(Request $request)
     {
@@ -251,6 +255,7 @@ class SalesCartController extends Controller
             'product_id' => 'required|integer|exists:products,id',
             'qty' => 'required|numeric|min:0.001',
             'rate' => 'required|numeric|min:0',
+            'below_min_override_id' => 'nullable|integer|min:1',
         ]);
 
         $customerId = (int) $request->input('customer_id');
@@ -261,6 +266,9 @@ class SalesCartController extends Controller
                 'product_id' => (int) $request->input('product_id'),
                 'qty' => (float) $request->input('qty'),
                 'rate' => (float) $request->input('rate'),
+                'below_min_override_id' => $request->input('below_min_override_id')
+                    ? (int) $request->input('below_min_override_id')
+                    : null,
             ]);
             return response()->json($result);
         } catch (\Throwable $e) {
@@ -270,6 +278,10 @@ class SalesCartController extends Controller
 
     /**
      * AJAX: Update a cart item (qty and/or rate).
+     *
+     * S6: accepts an optional `below_min_override_id` — required when
+     * the rate is being changed to a below-min value. The JS prompts
+     * for admin approval before calling this endpoint in that case.
      */
     public function update(Request $request)
     {
@@ -278,6 +290,7 @@ class SalesCartController extends Controller
             'product_id' => 'required|integer',
             'qty' => 'required|numeric|min:0.001',
             'rate' => 'nullable|numeric|min:0',
+            'below_min_override_id' => 'nullable|integer|min:1',
         ]);
 
         $customerId = (int) $request->input('customer_id');
@@ -285,9 +298,15 @@ class SalesCartController extends Controller
         $productId = (int) $request->input('product_id');
         $qty = (float) $request->input('qty');
         $rate = $request->input('rate') !== null ? (float) $request->input('rate') : null;
+        $belowMinOverrideId = $request->input('below_min_override_id')
+            ? (int) $request->input('below_min_override_id')
+            : null;
 
         try {
-            $result = $this->cartService->updateItem(auth()->id(), $customerId, $branchId, $productId, $qty, $rate);
+            $result = $this->cartService->updateItem(
+                auth()->id(), $customerId, $branchId, $productId, $qty, $rate,
+                null, $belowMinOverrideId
+            );
             return response()->json($result);
         } catch (\Throwable $e) {
             return response()->json(['status' => 'error', 'message' => $e->getMessage()], 400);

@@ -793,6 +793,14 @@
     var INITIAL_CART = @json($initialCart);
     var CSRF_TOKEN  = window.CSRF_TOKEN;
 
+    // S6: expose the current user's role + the below-min-approval
+    // endpoint to the cart JS. The modal uses IS_ADMIN to decide
+    // whether to show the "Override" button; the endpoint URL is
+    // posted to with the approver's credentials + reason.
+    window.IS_ADMIN_OR_MANAGER = {{ auth()->user() && (auth()->user()->isAdmin() || auth()->user()->hasRole('manager')) ? 'true' : 'false' }};
+    window.CURRENT_USER_ID = {{ auth()->id() ?? 'null' }};
+    window.BELOW_MIN_APPROVAL_ENDPOINT = "{{ route('admin.sales.below-min-approvals.store') }}";
+
     // Dispatch-branch: active branch name for the stock banner.
     // Updated whenever the #branch_id dropdown changes.
     window.ACTIVE_BRANCH_NAME = '{{ $branchName }}';
@@ -906,6 +914,114 @@
             showConfirmButton: false,
             timer: 2500,
             timerProgressBar: true
+        });
+    }
+
+    // ============================================================
+    // ============== S6: BELOW-MIN ADMIN OVERRIDE ================
+    // ============================================================
+    //
+    // When the cashier enters a rate below the product's min, the
+    // cart UI calls promptBelowMinApproval(). This shows a SweetAlert2
+    // modal asking for:
+    //   - approver username
+    //   - approver password (re-authentication — type=password)
+    //   - reason (textarea, min 10 chars)
+    //
+    // On submit, the modal POSTs to /admin/sales/below-min-approvals.
+    // The server re-authenticates the approver, checks their role is
+    // admin/manager AT THIS MOMENT (closes the privilege-escalation
+    // race where a manager's role is revoked between request and
+    // approval), validates the reason length, and inserts a
+    // user_audit_log row with action='below_min_override'. The
+    // returned audit_log_id is passed to /cart/add as
+    // `below_min_override_id`.
+    //
+    // Returns a Promise that resolves to { audit_log_id: int } on
+    // success, or rejects on cancel/failure.
+    function promptBelowMinApproval(product, rate, minRate, maxRate, defaultRate) {
+        return new Promise(function (resolve, reject) {
+            var html =
+                '<div class="text-start">' +
+                '<div class="alert alert-warning py-2 px-3 mb-3 small">' +
+                '<i class="fas fa-triangle-exclamation me-1"></i>' +
+                'Rate <strong>Tk ' + fmtMoney(rate) + '</strong> is below the minimum ' +
+                '<strong>Tk ' + fmtMoney(minRate) + '</strong> for <strong>' +
+                escHtml(product.product_name || ('Product #' + product.id)) + '</strong>. ' +
+                'Admin or manager approval is required.' +
+                '</div>' +
+
+                '<div class="row g-2 mb-2">' +
+                '<div class="col-6"><label class="form-label small fw-semibold">Approver Username</label>' +
+                '<input type="text" id="bmApproverUser" class="form-control form-control-sm" autocomplete="off"></div>' +
+                '<div class="col-6"><label class="form-label small fw-semibold">Approver Password</label>' +
+                '<input type="password" id="bmApproverPass" class="form-control form-control-sm" autocomplete="new-password"></div>' +
+                '</div>' +
+
+                '<div class="mb-1"><label class="form-label small fw-semibold">Reason (min 10 chars)</label>' +
+                '<textarea id="bmReason" class="form-control form-control-sm" rows="3" maxlength="500" ' +
+                'placeholder="e.g. Customer is a bulk buyer, special discount approved by phone"></textarea></div>' +
+                '<div class="text-muted small">The reason, approver, and rate are written to the audit log.</div>' +
+                '</div>';
+
+            Swal.fire({
+                title: '<i class="fas fa-shield-halved me-2 text-warning"></i>Below-Min Approval',
+                html: html,
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-check me-1"></i> Approve & Add',
+                cancelButtonText: 'Cancel',
+                confirmButtonColor: '#d97706',
+                cancelButtonColor: '#6b7280',
+                width: 560,
+                showLoaderOnConfirm: true,
+                preConfirm: function () {
+                    var approverUser = document.getElementById('bmApproverUser').value.trim();
+                    var approverPass = document.getElementById('bmApproverPass').value;
+                    var reason = document.getElementById('bmReason').value.trim();
+
+                    if (!approverUser || !approverPass) {
+                        Swal.showValidationMessage('Approver username and password are required.');
+                        return false;
+                    }
+                    if (reason.length < 10) {
+                        Swal.showValidationMessage('Reason must be at least 10 characters.');
+                        return false;
+                    }
+
+                    return ajaxPost(window.BELOW_MIN_APPROVAL_ENDPOINT, {
+                        approver_username: approverUser,
+                        approver_password: approverPass,
+                        product_id: product.id,
+                        product_name: product.product_name || null,
+                        requested_rate: rate,
+                        min_rate: minRate,
+                        max_rate: maxRate,
+                        default_rate: defaultRate,
+                        reason: reason,
+                        customer_id: state.customerId,
+                        branch_id: BRANCH_ID,
+                        cart_id: null,
+                        sale_line_index: null
+                    }).then(function (resp) {
+                        if (resp.status === 'success' && resp.audit_log_id) {
+                            return { audit_log_id: resp.audit_log_id };
+                        }
+                        throw new Error(resp.message || 'Approval failed.');
+                    }).catch(function (xhr) {
+                        var msg = (xhr.responseJSON && xhr.responseJSON.message)
+                            ? xhr.responseJSON.message
+                            : 'Approval request failed (HTTP ' + xhr.status + ').';
+                        Swal.showValidationMessage(msg);
+                        return false;
+                    });
+                }
+            }).then(function (result) {
+                if (result.isConfirmed && result.value && result.value.audit_log_id) {
+                    resolve({ audit_log_id: result.value.audit_log_id });
+                } else {
+                    reject(new Error('Below-min approval was cancelled.'));
+                }
+            });
         });
     }
 
@@ -1429,10 +1545,20 @@
         if ((validation.stock_errors || []).length) $stockBox.removeClass('d-none');
 
         (validation.rate_errors || []).forEach(function (e) {
+            // S6: distinguish below-min (needs override) from above-max (hard block).
+            var errorType = e.error_type || 'out_of_range';
+            var cssClass = 'text-warning mb-1';
+            var msg = 'rate ' + fmtMoney(e.rate) + ' (allowed ' + fmtMoney(e.min_rate) + '–' + fmtMoney(e.max_rate) + ')';
+            if (errorType === 'below_min_no_override') {
+                msg = 'rate ' + fmtMoney(e.rate) + ' is below minimum ' + fmtMoney(e.min_rate) +
+                      ' — admin/manager approval required to add this line.';
+            } else if (errorType === 'above_max') {
+                cssClass = 'text-danger mb-1';
+                msg = 'rate ' + fmtMoney(e.rate) + ' exceeds maximum ' + fmtMoney(e.max_rate) + '.';
+            }
             $('#rateErrorsList').append(
-                '<li class="text-warning mb-1">' +
-                    '<strong>' + escHtml(e.product_name) + '</strong> — ' +
-                    'rate ' + fmtMoney(e.rate) + ' (allowed ' + fmtMoney(e.min_rate) + '–' + fmtMoney(e.max_rate) + ')' +
+                '<li class="' + cssClass + '">' +
+                    '<strong>' + escHtml(e.product_name) + '</strong> — ' + msg +
                 '</li>'
             );
         });
@@ -2429,78 +2555,158 @@
             toast('Pick a product, qty > 0, rate >= 0.', 'error');
             return;
         }
-        ajaxPost(ENDPOINTS.add, {
-            customer_id: state.customerId,
-            product_id:  productId,
-            qty:         qty,
-            rate:        rate
-        })
-            .done(function (resp) {
-                if (resp.status === 'success') {
-                    toast(resp.message || 'Item added', 'success');
-                    if (resp.cart) {
-                        state.cart = resp.cart;
-                        state.validation = resp.cart.validation || state.validation;
-                        renderAll();
-                        // R11: refresh the active tab's badge from the new cart
-                        updateActiveTabBadge(
-                            (resp.cart.items || []).length,
-                            { softHold: state.softHold }
-                        );
-                    } else {
-                        loadCart(state.customerId);
-                    }
-                    // Reset add form (Decision A2: plain input, not Select2)
-                    resetProductEntry();
 
-                    // R18: refocus the product search box so the cashier
-                    // can immediately scan/type the next product without
-                    // reaching for the mouse. Mirrors Legacy
-                    // sales-create.js::resetProductEntry L632:
-                    //   document.getElementById('productSearch')?.focus();
-                    setTimeout(function () {
-                        var $ps = $('#productSearch');
-                        if ($ps.length) { $ps.focus(); }
-                    }, 50);
-                } else {
-                    toast(resp.message || 'Could not add item.', 'error');
-                }
-            })
-            .fail(function (xhr) {
-                toast('Add failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+        // S6: check if the rate is below min. If so, prompt the
+        // cashier for admin/manager approval BEFORE hitting /cart/add.
+        // The approval endpoint returns an audit_log_id which we pass
+        // to /cart/add as `below_min_override_id`. Without it, the
+        // server hard-blocks the below-min rate.
+        //
+        // We read the price range from state.activePriceRange (set by
+        // selectProduct() when the user picks a product). If it's null
+        // (no price range configured), we skip the check and let the
+        // server decide — the server's getProductPriceRange() will
+        // also return null and the line will be allowed.
+        var priceRange = state.activePriceRange;
+        var belowMinOverrideId = null;
+
+        var proceedWithAdd = function (overrideId) {
+            var payload = {
+                customer_id: state.customerId,
+                product_id:  productId,
+                qty:         qty,
+                rate:        rate
+            };
+            if (overrideId) {
+                payload.below_min_override_id = overrideId;
+            }
+            ajaxPost(ENDPOINTS.add, payload)
+                .done(function (resp) {
+                    if (resp.status === 'success') {
+                        toast(resp.message || 'Item added', 'success');
+                        if (resp.cart) {
+                            state.cart = resp.cart;
+                            state.validation = resp.cart.validation || state.validation;
+                            renderAll();
+                            // R11: refresh the active tab's badge from the new cart
+                            updateActiveTabBadge(
+                                (resp.cart.items || []).length,
+                                { softHold: state.softHold }
+                            );
+                        } else {
+                            loadCart(state.customerId);
+                        }
+                        // Reset add form (Decision A2: plain input, not Select2)
+                        resetProductEntry();
+
+                        // R18: refocus the product search box so the cashier
+                        // can immediately scan/type the next product without
+                        // reaching for the mouse. Mirrors Legacy
+                        // sales-create.js::resetProductEntry L632:
+                        //   document.getElementById('productSearch')?.focus();
+                        setTimeout(function () {
+                            var $ps = $('#productSearch');
+                            if ($ps.length) { $ps.focus(); }
+                        }, 50);
+                    } else {
+                        toast(resp.message || 'Could not add item.', 'error');
+                    }
+                })
+                .fail(function (xhr) {
+                    toast('Add failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+                });
+        };
+
+        if (priceRange && rate < priceRange.min_rate - 0.01) {
+            // Below min — prompt for approval. The modal handles the
+            // AJAX to /admin/sales/below-min-approvals and returns
+            // { audit_log_id } on success. On cancel/failure, we just
+            // abort the add (the line is not added to the cart).
+            var productObj = {
+                id: productId,
+                product_name: productCache[productId]?.product_name || ('Product #' + productId)
+            };
+            promptBelowMinApproval(
+                productObj, rate,
+                priceRange.min_rate, priceRange.max_rate, priceRange.default_rate
+            ).then(function (result) {
+                proceedWithAdd(result.audit_log_id);
+            }).catch(function () {
+                // Cancelled or failed — do nothing (no toast; the modal
+                // already showed the error if there was one).
             });
+        } else {
+            proceedWithAdd(null);
+        }
     }
 
     function updateItem(productId, qty, rate) {
         if (!state.customerId) return;
         if (!(qty > 0)) { toast('Qty must be > 0.', 'error'); return; }
-        var payload = {
-            customer_id: state.customerId,
-            product_id:  productId,
-            qty:         qty
-        };
-        if (rate !== null && rate !== undefined && !isNaN(rate)) payload.rate = rate;
 
-        ajaxPost(ENDPOINTS.update, payload)
-            .done(function (resp) {
-                if (resp.status === 'success' && resp.cart) {
-                    state.cart = resp.cart;
-                    state.validation = resp.cart.validation || state.validation;
-                    renderAll();
-                    // R11: qty/rate change doesn't change item count, but
-                    // refresh anyway in case the server merged a duplicate.
-                    updateActiveTabBadge(
-                        (resp.cart.items || []).length,
-                        { softHold: state.softHold }
-                    );
-                } else {
-                    toast(resp.message || 'Update failed.', 'error');
-                }
-            })
-            .fail(function (xhr) {
-                toast('Update failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
-                loadCart(state.customerId); // resync on failure
+        // S6: if the rate is being changed to below-min, prompt for
+        // approval first (same modal as addToCart). The returned
+        // audit_log_id is passed as `below_min_override_id` to /cart/update.
+        var existingItem = (state.cart && state.cart.items || []).find(function (it) {
+            return parseInt(it.product_id, 10) === parseInt(productId, 10);
+        });
+        var existingPriceRange = existingItem ? {
+            min_rate: parseFloat(existingItem.min_rate),
+            max_rate: parseFloat(existingItem.max_rate),
+            default_rate: parseFloat(existingItem.default_rate)
+        } : null;
+
+        var proceedWithUpdate = function (overrideId) {
+            var payload = {
+                customer_id: state.customerId,
+                product_id:  productId,
+                qty:         qty
+            };
+            if (rate !== null && rate !== undefined && !isNaN(rate)) payload.rate = rate;
+            if (overrideId) payload.below_min_override_id = overrideId;
+
+            ajaxPost(ENDPOINTS.update, payload)
+                .done(function (resp) {
+                    if (resp.status === 'success' && resp.cart) {
+                        state.cart = resp.cart;
+                        state.validation = resp.cart.validation || state.validation;
+                        renderAll();
+                        // R11: qty/rate change doesn't change item count, but
+                        // refresh anyway in case the server merged a duplicate.
+                        updateActiveTabBadge(
+                            (resp.cart.items || []).length,
+                            { softHold: state.softHold }
+                        );
+                    } else {
+                        toast(resp.message || 'Update failed.', 'error');
+                    }
+                })
+                .fail(function (xhr) {
+                    toast('Update failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+                    loadCart(state.customerId); // resync on failure
+                });
+        };
+
+        if (rate !== null && rate !== undefined && !isNaN(rate)
+            && existingPriceRange && existingPriceRange.min_rate
+            && rate < existingPriceRange.min_rate - 0.01) {
+            // Rate is being changed to below-min — prompt for approval.
+            var productObj = {
+                id: productId,
+                product_name: existingItem ? (existingItem.product_name || ('Product #' + productId)) : ('Product #' + productId)
+            };
+            promptBelowMinApproval(
+                productObj, rate,
+                existingPriceRange.min_rate, existingPriceRange.max_rate, existingPriceRange.default_rate
+            ).then(function (result) {
+                proceedWithUpdate(result.audit_log_id);
+            }).catch(function () {
+                // Cancelled — resync to revert the rate input.
+                loadCart(state.customerId);
             });
+        } else {
+            proceedWithUpdate(null);
+        }
     }
 
     function removeItem(productId) {

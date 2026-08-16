@@ -16,6 +16,9 @@ use Illuminate\Support\Facades\Log;
  *   2. sale_updated          — invoice edit (added in LOW-G / G-304)
  *   3. sale_cancelled        — invoice cancel
  *   4. credit_limit_override — override used (already in P0-6/P1-1)
+ *   4a. below_min_override   — below-min sale approved (S6; written by
+ *                              BelowMinApprovalService directly, listed
+ *                              here so recentSalesEvents() surfaces it)
  *   5. payment_received      — customer payment confirmed
  *   6. payment_reversed      — payment cancelled
  *   6a. payment_discount     — discount allowed (transaction_type='discount')
@@ -444,6 +447,10 @@ class SalesAuditLogger
         $actions = [
             'sale_created', 'sale_updated', 'sale_cancelled', 'sale_call_a_day',
             'credit_limit_override',
+            // S6: below-min override (written by BelowMinApprovalService::approve()
+            // directly to user_audit_log — included here so it shows up in the
+            // sales audit trail dashboard).
+            'below_min_override',
             'payment_received', 'payment_reversed',
             'payment_discount', 'payment_write_off', 'payment_refund',
             'return_created', 'return_confirmed', 'return_reversed',
