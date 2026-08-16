@@ -9,6 +9,7 @@ use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
+use App\Services\DemandItemFifoResolver;
 use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -47,7 +48,8 @@ class SalesReturnService
         private DamageService $damageService,
         private NotificationService $notifications,
         private SalesReturnReversalGuard $reversalGuard,
-        private CommissionService $commission
+        private CommissionService $commission,
+        private DemandItemFifoResolver $fifoResolver
     ) {}
 
     /**
@@ -203,6 +205,43 @@ class SalesReturnService
                     'transaction_date' => $returnDate,
                     'created_by' => $confirmedBy,
                 ]);
+            }
+
+            // 1a. S7: Release the consumed_qty on each linked demand item.
+            // For each sales_return_item, find the linked sales_invoice_item
+            // and decrement its branch_demand_items.consumed_qty by the
+            // returned qty. This is the inverse of the consume() call in
+            // SalesInvoiceService::finalizeFromCart().
+            //
+            // Multi-demand-item split lines (S7 finalize could split a
+            // single cart line into multiple sales_invoice_items rows,
+            // one per demand item): the return item references ONE
+            // sales_invoice_item_id, so we release only that one's qty
+            // — proportional attribution is preserved.
+            //
+            // Wrapped in try/catch + Log::warning: a release failure
+            // (e.g., demand item was deleted, or CHECK constraint would
+            // be violated) MUST NOT block the return confirmation.
+            // The stock + GL reversal is the source of truth; consumed_qty
+            // is a downstream attribution concern. The next demand-item
+            // FIFO resolution will simply have slightly less available
+            // qty than the physical stock suggests — a self-correcting
+            // drift that the S8 report will surface.
+            foreach ($return->items as $item) {
+                $salesInvoiceItemId = (int) ($item->sales_invoice_item_id ?? 0);
+                if ($salesInvoiceItemId <= 0) {
+                    continue;
+                }
+                try {
+                    $this->fifoResolver->release($salesInvoiceItemId, (float) $item->qty);
+                } catch (\Throwable $e) {
+                    Log::warning('S7 fifoResolver->release failed (non-blocking)', [
+                        'return_id' => $returnId,
+                        'sales_invoice_item_id' => $salesInvoiceItemId,
+                        'qty' => (float) $item->qty,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
 
             // 1b. P1-5: Linked damage write-off for 'Damage' condition items.
@@ -380,6 +419,34 @@ class SalesReturnService
                 );
             }
 
+            // S7: Re-consume the qty on the demand items linked to each
+            // sales_invoice_item. The confirmReturn step (1a) RELEASED the
+            // consumed_qty — reversing the return must restore it so the
+            // demand item's available-for-attribution qty is correct.
+            // (Without this, the demand item would appear to have more
+            //  un-consumed qty than the physical stock supports.)
+            //
+            // Wrapped in try/catch: a re-consume failure (e.g. demand item
+            // was deleted in the interim) is non-blocking — same rationale
+            // as the release in confirmReturn.
+            $branchId = (int) $return->branch_id;
+            foreach ($return->items as $item) {
+                $salesInvoiceItemId = (int) ($item->sales_invoice_item_id ?? 0);
+                if ($salesInvoiceItemId <= 0) {
+                    continue;
+                }
+                try {
+                    $this->reConsumeForReversedReturn($salesInvoiceItemId, $branchId, (float) $item->qty);
+                } catch (\Throwable $e) {
+                    Log::warning('S7 re-consume on return reversal failed (non-blocking)', [
+                        'return_id' => $returnId,
+                        'sales_invoice_item_id' => $salesInvoiceItemId,
+                        'qty' => (float) $item->qty,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
             // Mark return as reversed.
             DB::table('sales_returns')
                 ->where('id', $returnId)
@@ -429,6 +496,57 @@ class SalesReturnService
 
             return SalesReturn::find($returnId);
         });
+    }
+
+    /**
+     * S7: Re-consume qty on the demand item linked to a sales_invoice_item
+     * when a return is reversed. The confirmReturn flow released the
+     * consumed_qty; reversing the return must restore it.
+     *
+     * Strategy: read the sales_invoice_item.branch_demand_item_id (if set)
+     * and bump consumed_qty by the returned qty, capped at the demand
+     * item's `qty` (CHECK constraint enforced).
+     *
+     * If branch_demand_item_id is NULL (direct supplier purchase case),
+     * no-op — there's nothing to re-consume.
+     */
+    private function reConsumeForReversedReturn(int $salesInvoiceItemId, int $branchId, float $qty): void
+    {
+        if ($qty <= 0 || $salesInvoiceItemId <= 0) {
+            return;
+        }
+
+        $line = DB::table('sales_invoice_items')
+            ->where('id', $salesInvoiceItemId)
+            ->first(['id', 'branch_demand_item_id']);
+
+        if (!$line || $line->branch_demand_item_id === null) {
+            return;
+        }
+
+        $demandItemId = (int) $line->branch_demand_item_id;
+        $demandItem = DB::table('branch_demand_items')
+            ->where('id', $demandItemId)
+            ->lockForUpdate()
+            ->first(['id', 'qty', 'consumed_qty']);
+
+        if (!$demandItem) {
+            return;
+        }
+
+        $maxRestorable = (float) $demandItem->qty - (float) $demandItem->consumed_qty;
+        $actualRestore = min($qty, $maxRestorable);
+        if ($actualRestore <= 0.001) {
+            return;
+        }
+
+        DB::table('branch_demand_items')
+            ->where('id', $demandItemId)
+            ->update([
+                'consumed_qty' => DB::raw('consumed_qty + ' . rtrim(rtrim(number_format($actualRestore, 6, '.', ''), '0'), '.')),
+                'consumed_qty_updated_at' => now(),
+                'updated_at' => now(),
+            ]);
     }
 
     /**
