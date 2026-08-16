@@ -27,6 +27,7 @@ use App\Http\Controllers\Admin\WarehouseTransferController;
 use App\Http\Controllers\Admin\BranchDemandController;
 use App\Http\Controllers\Admin\BranchDemandShadowController;
 use App\Http\Controllers\Admin\BranchDemandReportController;
+use App\Http\Controllers\Admin\BranchPnlReportController;
 use App\Http\Controllers\Admin\DamageController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\PurchaseReceiveController;
@@ -301,6 +302,12 @@ Route::middleware('auth')->group(function () {
         Route::get('audit', [BranchController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::post('{branch}/restore', [BranchController::class, 'restore'])->name('restore')->middleware('role:admin');
         Route::post('{branch}/toggle', [BranchController::class, 'toggle'])->name('toggle')->middleware('role:admin');
+        // Session 8: Branch P&L Report — admin/manager/accountant (mirrors
+        // the existing reports route group RBAC).
+        Route::get('{branch}/pnl', [BranchPnlReportController::class, 'show'])->name('pnl')
+            ->middleware('role:admin,manager,accountant');
+        Route::get('{branch}/pnl/export', [BranchPnlReportController::class, 'export'])->name('pnl.export')
+            ->middleware('role:admin,manager,accountant');
     });
     // Read access (index, show): admin, manager, warehouse_manager
     Route::resource('admin/branches', BranchController::class)
@@ -785,6 +792,9 @@ Route::middleware('auth')->group(function () {
             ->middleware('role:admin,manager,accountant');
         Route::get('{id}/audit', [BranchDemandController::class, 'audit'])->name('audit');
         Route::get('reconcile', [BranchDemandController::class, 'reconcile'])->name('reconcile')
+            ->middleware('role:admin,manager,accountant');
+        // Session 8: per-demand P&L drilldown — admin/manager/accountant.
+        Route::get('{id}/pnl', [BranchPnlReportController::class, 'showForDemand'])->name('pnl')
             ->middleware('role:admin,manager,accountant');
     });
     Route::resource('admin/branch-demands', BranchDemandController::class)
