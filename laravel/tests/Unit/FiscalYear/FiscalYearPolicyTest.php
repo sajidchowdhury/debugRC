@@ -47,10 +47,16 @@ class FiscalYearPolicyTest extends TestCase
      * authenticated admin to bypass). Using DB::table bypasses the
      * scope entirely — we only need the row to exist for the policy
      * to receive it as an argument.
+     *
+     * S1 added a NOT NULL `created_by` column to `fiscal_years`. We
+     * resolve it to the system user id (mirrors the seed migration
+     * 2026_08_10_000004 pattern) so we don't need to create a full
+     * User+Employee+Branch chain just for a not-null fill.
      */
     private function makeFiscalYear(string $status, bool $isCurrent = false): FiscalYear
     {
         $branch = Branch::factory()->create();
+        $sysUserId = DB::table('users')->value('id') ?? 1;
         $id = DB::table('fiscal_years')->insertGetId([
             'name'             => 'FY-TEST-' . uniqid(),
             'fiscal_year_code' => 'FY-' . substr(uniqid(), -6),
@@ -61,6 +67,7 @@ class FiscalYearPolicyTest extends TestCase
             'status'           => $status,
             'is_current'       => $isCurrent,
             'description'      => 'Test fiscal year',
+            'created_by'       => $sysUserId,
             'created_at'       => now(),
             'updated_at'       => now(),
         ]);

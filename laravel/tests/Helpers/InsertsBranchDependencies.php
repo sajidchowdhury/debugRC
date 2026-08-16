@@ -63,22 +63,86 @@ trait InsertsBranchDependencies
     /**
      * Insert a branch demand row with the minimum required columns.
      * Returns the demand id.
+     *
+     * Session 1 (FY isolation) added a NOT NULL `fiscal_year_id` column
+     * to `branch_demands`. If `$fiscalYearId` is not provided, the
+     * helper auto-resolves to the current running FY (is_current=true
+     * AND status=active), creating one if none exists yet. Callers
+     * that need to attach the demand to a specific FY (e.g. a closed
+     * FY for the closed-FY 403 test) can pass `$fiscalYearId` directly
+     * or override it after insert.
      */
     protected function insertBranchDemand(
         int $fromBranchId,
         int $toBranchId,
         string $status = 'pending',
         ?string $demandCode = null,
+        ?int $fiscalYearId = null,
     ): int {
+        $fiscalYearId ??= $this->resolveActiveFiscalYearId();
+
         return DB::table('branch_demands')->insertGetId([
-            'demand_code'    => $demandCode ?? 'BD-' . uniqid(),
-            'demand_date'    => now()->toDateString(),
-            'from_branch_id' => $fromBranchId,
-            'to_branch_id'   => $toBranchId,
-            'status'         => $status,
-            'is_reversed'    => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
+            'demand_code'     => $demandCode ?? 'BD-' . uniqid(),
+            'demand_date'     => now()->toDateString(),
+            'from_branch_id'  => $fromBranchId,
+            'to_branch_id'    => $toBranchId,
+            'status'          => $status,
+            'is_reversed'     => false,
+            'fiscal_year_id'  => $fiscalYearId,
+            'created_at'      => now(),
+            'updated_at'      => now(),
+        ]);
+    }
+
+    /**
+     * Resolve an active fiscal year id for test inserts.
+     *
+     * Looks for an existing FY with is_current=true AND status=active.
+     * If none exists, creates one (covering the current calendar year)
+     * so the NOT NULL `fiscal_year_id` column on `branch_demands` and
+     * other operational tables can be satisfied.
+     *
+     * Uses DB::table (bypasses BranchScope) + withoutGlobalScope via
+     * raw SQL — we don't want test setup to depend on the auth state.
+     */
+    protected function resolveActiveFiscalYearId(): int
+    {
+        $existing = DB::table('fiscal_years')
+            ->where('is_current', true)
+            ->where('status', 'active')
+            ->value('id');
+
+        if ($existing) {
+            return (int) $existing;
+        }
+
+        // Fall back to ANY active FY (status=active, even if is_current=false).
+        $anyActive = DB::table('fiscal_years')
+            ->where('status', 'active')
+            ->value('id');
+
+        if ($anyActive) {
+            return (int) $anyActive;
+        }
+
+        // Last resort: create a minimal active FY. Reuse the system user
+        // id (mirrors the seed migration 2026_08_10_000004 pattern).
+        $sysUserId = DB::table('users')->value('id') ?? 1;
+        $year = now()->year;
+
+        return (int) DB::table('fiscal_years')->insertGetId([
+            'name'             => "Test FY {$year}-{$year}",
+            'fiscal_year_code' => 'TFY-' . substr(uniqid(), -6),
+            'start_date'       => "{$year}-01-01",
+            'end_date'         => "{$year}-12-31",
+            'branch_id'        => null,
+            'period_type'      => 'monthly',
+            'status'           => 'active',
+            'is_current'       => true,
+            'description'      => 'Auto-created by test helper resolveActiveFiscalYearId()',
+            'created_by'       => $sysUserId,
+            'created_at'       => now(),
+            'updated_at'       => now(),
         ]);
     }
 

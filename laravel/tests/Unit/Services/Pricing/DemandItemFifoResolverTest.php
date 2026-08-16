@@ -69,7 +69,7 @@ class DemandItemFifoResolverTest extends TestCase
             'product_name'  => 'Test Product ' . uniqid(),
             'category_id'   => $categoryId,
             'group_id'      => $groupId,
-            'unit'          => 'PCS',
+            'unit'          => 'Pcs',  // CHECK (unit IN ('Pcs','Carton','KG','Bag','Dobe','Set'))
             'purchase_rate' => $purchaseRate,
             'sales_rate'    => $purchaseRate * 1.2,
             'is_active'     => true,
@@ -113,19 +113,34 @@ class DemandItemFifoResolverTest extends TestCase
      * Insert a sales_invoice_items row (minimal columns). Used by
      * release() tests — release() looks up the sale line by id to
      * find its branch_demand_item_id + qty.
+     *
+     * Builds the minimum chain: branch → customer → sales_invoice →
+     * sales_invoice_item. The sales_invoices schema has NOT NULL
+     * customer_id + branch_id columns; we satisfy them via a
+     * factory-created branch + a customers row insert.
      */
     private function insertSalesInvoiceItem(int $productId, float $qty, ?int $branchDemandItemId = null): int
     {
+        $branch = Branch::factory()->create();
+
+        $customerId = DB::table('customers')->insertGetId([
+            'customer_code' => 'CUST-FIFO-' . substr(uniqid(), -8),
+            'customer_name' => 'FIFO Test Customer',
+            'branch_id'     => $branch->id,
+            'created_at'    => now(),
+            'updated_at'    => now(),
+        ]);
+
         // sales_invoice_items requires a sales_invoice_id (trigger-enforced
         // FK). Insert a minimal sales_invoices row first.
         $siId = DB::table('sales_invoices')->insertGetId([
             'invoice_code'  => 'INV-' . substr(uniqid(), -8),
             'invoice_date'  => now()->toDateString(),
-            'customer_id'   => null,  // see if NULL is allowed
-            'branch_id'     => 1,
-            'salesman_id'   => null,
+            'customer_id'   => $customerId,
+            'branch_id'     => $branch->id,
             'total_amount'  => $qty * 10,
-            'status'        => 'finalized',
+            'status'        => 'confirmed',  // CHECK IN ('draft','confirmed','cancelled','reversed')
+            'is_reversed'   => false,
             'created_at'    => now(),
             'updated_at'    => now(),
         ]);
