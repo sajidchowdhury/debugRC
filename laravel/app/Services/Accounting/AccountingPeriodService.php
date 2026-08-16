@@ -7,6 +7,7 @@ use App\Models\FiscalYear;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\SubLedgerService;
 use App\Services\DatabaseBackupService;
+use App\Services\FiscalYearPartitionService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
@@ -34,7 +35,8 @@ class AccountingPeriodService
     public function __construct(
         private JournalPostingService $postingService,
         private SubLedgerService $subLedgerService,
-        private DatabaseBackupService $databaseBackupService
+        private DatabaseBackupService $databaseBackupService,
+        private FiscalYearPartitionService $partitionService
     ) {}
 
     /**
@@ -350,15 +352,17 @@ ORDER BY l.account_type, l.ledger_name
 SQL, [$branchId, $yearEndDate]);
 
         if (empty($ledgerBalances)) {
-            return [
-                'status' => 'success',
-                'message' => 'No Income/Expense balances to close. Year-end close not needed.',
-                'journal_entry_id' => null,
-                'net_profit' => 0,
-                'income_total' => 0,
-                'expense_total' => 0,
-            ];
-        }
+            // Nothing to zero — but we still need to refresh opening
+            // balances and detach the FY's partitions, because the
+            // caller (FiscalYearService::closeFiscalYear) is about to
+            // flip the FY status to 'closed' regardless. Skip the JE
+            // posting step and fall through to steps C + D below.
+            $journalEntryId = null;
+            $netProfit      = 0.0;
+            $incomeTotal    = 0.0;
+            $expenseTotal   = 0.0;
+            $ledgerBalances = []; // keep for the count() below
+        } else {
 
         // 4. Build the year-end journal entry lines.
         $lines = [];
@@ -451,6 +455,53 @@ SQL, [$branchId, $yearEndDate]);
             'ledgers_closed' => count($ledgerBalances),
         ]);
 
+        } // end else (ledgerBalances was non-empty — JE was posted)
+
+        // ── Session 4 — Step C: refresh opening balances ────────────
+        // After the closing JE posts, refresh `ledgers.opening_balance`,
+        // `customers.opening_balance`, and `suppliers.opening_balance`
+        // so the new FY opens with correct carry-forward balances.
+        //
+        // This MUST run BEFORE the partition detach (step D) — we are
+        // reading from the still-attached parent tables (which contain
+        // every transaction up to and including $yearEndDate) to compute
+        // the closing balance, and writing it to master-data tables
+        // (ledgers/customers/suppliers) which are NOT partitioned and
+        // NOT scoped to a fiscal year.
+        //
+        // For ledgers: only balance-sheet accounts (Asset, Liability,
+        // Equity) carry forward — Income/Expense were just zeroed by
+        // the closing JE above.
+        //
+        // For customers/suppliers: the opening_balance is the AR/AP
+        // outstanding as of the FY end date.
+        $openingBalances = $this->refreshOpeningBalances($branchId, $yearEndDate);
+
+        // ── Session 4 — Step D: detach + archive partitions ────────
+        // After opening balances are refreshed, physically DETACH every
+        // monthly partition of every RANGE-partitioned operational table
+        // that belongs to this fiscal year and move them to the `archive`
+        // schema. After this, the closed-FY rows are physically invisible
+        // to every normal query against the parent table — even the
+        // BelongsToFiscalYear scope's `withoutGlobalScope('current_fy')`
+        // escape hatch cannot see them without `restore_partition()`.
+        //
+        // This is the strongest read-block in the system. It is the
+        // guarantee the client is paying for.
+        //
+        // If detach fails partway, the exception propagates and the
+        // caller (FiscalYearService::closeFiscalYear) MUST NOT flip the
+        // FY status to 'closed'. The next invocation is safe to re-run
+        // — already-archived partitions are skipped (idempotent).
+        $partitionResult = $this->partitionService->detachAndArchive($fy->id);
+
+        Log::info('Year-end close — partitions detached', [
+            'fiscal_year_id' => $fy->id,
+            'detached_count' => count($partitionResult['detached']),
+            'skipped_count'  => count($partitionResult['skipped']),
+            'missing_count'  => count($partitionResult['missing']),
+        ]);
+
         return [
             'status' => 'success',
             'message' => "Year-end close completed. Net P&L: " . number_format($netProfit, 2)
@@ -460,6 +511,128 @@ SQL, [$branchId, $yearEndDate]);
             'income_total' => round($incomeTotal, 2),
             'expense_total' => round($expenseTotal, 2),
             'ledgers_closed' => count($ledgerBalances),
+            'opening_balances_refreshed' => $openingBalances,
+            'partitions_detached' => count($partitionResult['detached']),
+            'partitions_skipped'  => count($partitionResult['skipped']),
+            'partitions_missing'  => count($partitionResult['missing']),
+        ];
+    }
+
+    /**
+     * Refresh `opening_balance` columns on master-data tables so the
+     * new fiscal year opens with correct carry-forward balances.
+     *
+     * Runs as part of {@see yearEndClose()} AFTER the closing JE posts
+     * and BEFORE partition detach. The closing balances are computed
+     * from the still-attached parent tables.
+     *
+     * Targets:
+     *   - `ledgers.opening_balance`      for ledgers of account_type IN (Asset, Liability, Equity).
+     *     Income/Expense ledgers were just zeroed by the closing JE.
+     *   - `customers.opening_balance`    = SUM(debit) - SUM(credit) on
+     *     `customer_ledger` for non-reversed entries dated <= $yearEndDate.
+     *   - `suppliers.opening_balance`    = SUM(credit) - SUM(debit) on
+     *     `supplier_ledger` for non-reversed entries dated <= $yearEndDate.
+     *
+     * These master-data tables are NOT fiscal-year-scoped and NOT
+     * partitioned — they hold the carry-forward balance for whichever
+     * FY is currently active.
+     *
+     * @param  int    $branchId
+     * @param  string $yearEndDate  Y-m-d (inclusive — entries on this date count).
+     * @return array{ ledgers: int, customers: int, suppliers: int }
+     */
+    private function refreshOpeningBalances(int $branchId, string $yearEndDate): array
+    {
+        // ── 1. Ledgers.opening_balance ─────────────────────────────
+        // For each balance-sheet ledger (Asset, Liability, Equity — NOT
+        // Income/Expense which were just zeroed), compute
+        //   SUM(jl.debit) - SUM(jl.credit)
+        // for non-reversed journal entries dated <= $yearEndDate
+        // (branch-scoped or branch-NULL) and write it to the ledger's
+        // opening_balance column.
+        //
+        // We write a single UPDATE ... FROM (subquery) so this is one
+        // round-trip per refresh, regardless of ledger count.
+        $ledgersUpdated = DB::affectingStatement(<<<SQL
+UPDATE ledgers l
+SET opening_balance = COALESCE(bal.net_balance, 0),
+    updated_at = NOW()
+FROM (
+    SELECT
+        jl.ledger_id,
+        SUM(jl.debit) - SUM(jl.credit) AS net_balance
+    FROM journal_lines jl
+    JOIN journal_entries je ON je.id = jl.journal_entry_id
+    WHERE je.is_reversed = false
+      AND je.entry_date <= ?
+      AND (je.branch_id = ? OR je.branch_id IS NULL)
+    GROUP BY jl.ledger_id
+) bal
+WHERE l.id = bal.ledger_id
+  AND l.account_type IN ('Asset', 'Liability', 'Equity')
+  AND l.is_active = true
+  AND l.deleted_at IS NULL
+SQL, [$yearEndDate, $branchId]);
+
+        // Also zero out opening_balance for Income/Expense ledgers so
+        // the new FY starts them at zero (matches the closing JE effect).
+        DB::table('ledgers')
+            ->whereIn('account_type', ['Income', 'Expense'])
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->update(['opening_balance' => 0, 'updated_at' => now()]);
+
+        // ── 2. Customers.opening_balance ───────────────────────────
+        // = SUM(debit) - SUM(credit) on customer_ledger for non-reversed
+        // entries dated <= $yearEndDate (debit-heavy = customer owes us).
+        $customersUpdated = DB::affectingStatement(<<<SQL
+UPDATE customers c
+SET opening_balance = COALESCE(bal.balance, 0),
+    updated_at = NOW()
+FROM (
+    SELECT
+        cl.customer_id,
+        SUM(cl.debit) - SUM(cl.credit) AS balance
+    FROM customer_ledger cl
+    WHERE cl.is_reversed = false
+      AND cl.transaction_date <= ?
+    GROUP BY cl.customer_id
+) bal
+WHERE c.id = bal.customer_id
+SQL, [$yearEndDate]);
+
+        // ── 3. Suppliers.opening_balance ───────────────────────────
+        // = SUM(credit) - SUM(debit) on supplier_ledger for non-reversed
+        // entries dated <= $yearEndDate (credit-heavy = we owe supplier).
+        $suppliersUpdated = DB::affectingStatement(<<<SQL
+UPDATE suppliers s
+SET opening_balance = COALESCE(bal.balance, 0),
+    updated_at = NOW()
+FROM (
+    SELECT
+        sl.supplier_id,
+        SUM(sl.credit) - SUM(sl.debit) AS balance
+    FROM supplier_ledger sl
+    WHERE sl.is_reversed = false
+      AND sl.transaction_date <= ?
+    GROUP BY sl.supplier_id
+) bal
+WHERE s.id = bal.supplier_id
+SQL, [$yearEndDate]);
+
+        Log::info('Opening balances refreshed for new FY', [
+            'branch_id'         => $branchId,
+            'year_end_date'     => $yearEndDate,
+            'ledgers_updated'   => $ledgersUpdated,
+            'customers_updated' => $customersUpdated,
+            'suppliers_updated' => $suppliersUpdated,
+        ]);
+
+        return [
+            'ledgers'   => $ledgersUpdated,
+            'customers' => $customersUpdated,
+            'suppliers' => $suppliersUpdated,
         ];
     }
 
