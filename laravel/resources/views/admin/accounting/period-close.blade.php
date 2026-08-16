@@ -180,6 +180,25 @@
                             <div class="text-danger small mt-2">Complete all checklist items first.</div>
                         @endif
                     </form>
+
+                    {{-- Session 3 — Backup command help block --}}
+                    @php
+                        $backupCheck = collect($yearEndChecks)->first(fn($c) => str_contains($c['label'], 'Database backup on file'));
+                    @endphp
+                    @if ($backupCheck && !$backupCheck['passed'])
+                        <div class="alert alert-warning small mt-3 mb-0">
+                            <h6 class="alert-heading"><i class="fas fa-database me-1"></i>Database backup required</h6>
+                            <p class="mb-2">Year-end close requires a fresh (≤ {{ config('backup.freshness_hours', 24) }}h old) verified <code>pg_dump -Fc</code> backup file on disk before it can proceed.</p>
+                            <p class="mb-1"><strong>Run on the server (or via SSH to the Docker host):</strong></p>
+                            <pre class="bg-dark text-light p-2 rounded small mb-0"><code>php artisan db:backup-year-end {{-- fiscal-year=<id> --}}</code></pre>
+                            <p class="mb-0 mt-2 text-muted">
+                                The backup file is written to: <code>{{ config('backup.backup_path') }}</code>
+                                @if (auth()->user()?->isSuperadmin())
+                                    — override via <code>BACKUP_PATH</code> in <code>.env</code>.
+                                @endif
+                            </p>
+                        </div>
+                    @endif
                 </div>
             </div>
 

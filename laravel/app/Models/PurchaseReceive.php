@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -47,7 +48,7 @@ use App\Traits\ApplySystemPolicyScope;
  */
 class PurchaseReceive extends Model
 {
-    use SoftDeletes, AuditableMasterData, ApplySystemPolicyScope;
+    use SoftDeletes, AuditableMasterData, ApplySystemPolicyScope, BelongsToFiscalYear;
 
     protected $table = 'purchase_receives';
 

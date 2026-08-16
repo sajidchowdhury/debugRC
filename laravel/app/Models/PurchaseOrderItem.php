@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 
@@ -17,6 +18,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class PurchaseOrderItem extends Model
 {
+    use BelongsToFiscalYear;
+
     protected $table = 'purchase_order_items';
 
     public $timestamps = false;

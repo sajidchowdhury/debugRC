@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 
@@ -24,6 +25,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class BranchDemandItem extends Model
 {
+    use BelongsToFiscalYear;
+
     protected $table = 'branch_demand_items';
 
     // G-352 (G27) FINANCE-BD-1: timestamps now enabled. Migration

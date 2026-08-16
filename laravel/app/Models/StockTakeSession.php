@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -49,7 +50,7 @@ use App\Traits\AuditableMasterData;
  */
 class StockTakeSession extends Model
 {
-    use SoftDeletes, AuditableMasterData, HasFactory;
+    use SoftDeletes, AuditableMasterData, HasFactory, BelongsToFiscalYear;
 
     protected $table = 'stock_take_sessions';
 

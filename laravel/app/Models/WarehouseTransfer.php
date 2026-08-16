@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -65,7 +66,7 @@ use App\Models\Scopes\WarehouseTransferBranchScope;
  */
 class WarehouseTransfer extends Model
 {
-    use SoftDeletes, AuditableMasterData;
+    use SoftDeletes, AuditableMasterData, BelongsToFiscalYear;
 
     /** Phase 1: Apply WarehouseTransferBranchScope for branch isolation. */
     protected static function booted(): void

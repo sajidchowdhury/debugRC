@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 
@@ -29,6 +30,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class SalesChallanItem extends Model
 {
+    use BelongsToFiscalYear;
+
     protected $table = 'sales_challan_items';
 
     public $timestamps = false; // only created_at, no updated_at column (legacy pattern)

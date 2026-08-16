@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 use App\Traits\AuditableMasterData;
@@ -49,7 +50,7 @@ use App\Models\Scopes\BranchScope;
  */
 class EmployeeTransaction extends Model
 {
-    use AuditableMasterData;
+    use AuditableMasterData, BelongsToFiscalYear;
 
     protected $table = 'employee_transactions';
 

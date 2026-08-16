@@ -1,11 +1,14 @@
 <?php
 
 namespace App\Models\Accounting;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 
 class JournalEntry extends Model
 {
+    use BelongsToFiscalYear;
+
     protected $table = 'journal_entries';
 
     public $timestamps = true;

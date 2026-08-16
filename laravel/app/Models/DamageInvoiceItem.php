@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 
@@ -15,6 +16,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class DamageInvoiceItem extends Model
 {
+    use BelongsToFiscalYear;
+
     protected $table = 'damage_invoice_items';
 
     public $timestamps = false;

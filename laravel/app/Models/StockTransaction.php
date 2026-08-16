@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
@@ -52,6 +53,8 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class StockTransaction extends Model
 {
+    use BelongsToFiscalYear;
+
     protected $table = 'stock_transactions';
 
     public $timestamps = false;

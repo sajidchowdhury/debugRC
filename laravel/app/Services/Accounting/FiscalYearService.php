@@ -6,6 +6,7 @@ use App\Models\FiscalYear;
 use App\Models\FiscalPeriod;
 use App\Models\PeriodCloseLog;
 use App\Services\Accounting\AccountingPeriodService;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
@@ -77,6 +78,11 @@ class FiscalYearService
                 'is_current'  => true,
             ]);
 
+            // Session 2: invalidate the active-FY cache so the very next
+            // request resolves to the newly-activated FY rather than the
+            // previously-cached value (or null).
+            FiscalYearResolver::clearCache();
+
             return $fy->fresh();
         });
     }
@@ -118,6 +124,16 @@ class FiscalYearService
         // Log the action
         $this->logAction(null, $fy, $branchId, 'close', $fy->start_date, $fy->end_date, $closedBy, 'Fiscal year closed');
 
+        // Session 2: invalidate the active-FY cache. The closed FY is no
+        // longer active, so the BelongsToFiscalYear global scope on every
+        // operational model must NOT resolve to this FY id on the next
+        // request. If a new FY was already activated (typical flow),
+        // clearCache() lets the next activeId() call pick up the new FY.
+        // If no new FY is active yet, the next request will fail-closed
+        // with a clear "no active fiscal year" error — which is the
+        // intended signal to the accountant to activate the next FY.
+        FiscalYearResolver::clearCache();
+
         return $yearEndResult;
     }
 
@@ -135,6 +151,12 @@ class FiscalYearService
 
         $branchId = $fy->branch_id ?? (int) session('branch_id', 0);
         $this->logAction(null, $fy, $branchId, 'lock', $fy->start_date, $fy->end_date, $lockedBy, $reason);
+
+        // Session 2: invalidate the active-FY cache. Locking a FY removes
+        // it from the active candidate pool (status='active' filter in
+        // FiscalYearResolver::activeId()), so the cached value (if any)
+        // is now stale.
+        FiscalYearResolver::clearCache();
 
         return $fy->fresh();
     }
