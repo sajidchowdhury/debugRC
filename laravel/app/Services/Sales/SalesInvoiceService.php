@@ -14,6 +14,7 @@ use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
 use App\Services\BranchDemand\BranchDemandService;
 use App\Services\Notification\NotificationService;
+use App\Services\DemandItemFifoResolver;
 use App\Support\PriceClassifier;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -56,7 +57,8 @@ class SalesInvoiceService
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
         private NotificationService $notifications,
-        private BranchDemandService $branchDemandService
+        private BranchDemandService $branchDemandService,
+        private DemandItemFifoResolver $fifoResolver
     ) {}
 
     /**
@@ -218,6 +220,16 @@ class SalesInvoiceService
             // exists (direct supplier purchase), fall back to
             // products.purchase_rate. If both are NULL, leave cost_rate
             // NULL — the report will mark the line as "cost unknown".
+            //
+            // Session 7: also call DemandItemFifoResolver::consume() per
+            // cart line to atomically attribute the sold qty to the
+            // oldest open demand item(s). If the sale spans multiple
+            // demand items, the cart line is SPLIT into multiple
+            // sales_invoice_items rows (one per demand item) so each
+            // row has a single branch_demand_item_id — this preserves
+            // the 1:1 relationship for clean P&L attribution in S8.
+            // If no open demand item exists (direct supplier purchase),
+            // a single row is created with branch_demand_item_id=NULL.
             $productIds = collect($items)->pluck('product_id')->unique()->all();
             $productCosts = [];
             if (!empty($productIds) && $branchId > 0) {
@@ -238,6 +250,7 @@ class SalesInvoiceService
                 $priceMax  = isset($item['max_rate']) ? (float) $item['max_rate'] : null;
                 $priceDef  = isset($item['default_rate']) ? (float) $item['default_rate'] : null;
                 $costRate  = $productCosts[$productId] ?? null;
+                $lineQty   = (float) $item['qty'];
 
                 // S6: read the below-min override id from the cart line.
                 // Was set by SalesCartService::addItem() when the cashier
@@ -270,25 +283,55 @@ class SalesInvoiceService
                     $classification = 'below_min';
                 }
 
-                $itemRows[] = [
-                    'sales_invoice_id' => $invoiceId,
-                    'product_id' => $productId,
-                    'warehouse_id' => null, // assigned at godown (Phase 8.3)
-                    'qty' => (float) $item['qty'],
-                    'rate' => $rate,
-                    // G-160 (SALES-AUDIT-2): condition_state DROPPED — was always 'Good'.
-                    // Session 5: price + cost snapshots + classification.
-                    'price_min' => $priceMin,
-                    'price_max' => $priceMax,
-                    'price_default' => $priceDef,
-                    'cost_rate' => $costRate > 0 ? $costRate : null,
-                    'price_classification' => $classification,
-                    // branch_demand_item_id: populated in Session 7 (FIFO linkage).
-                    // S6: below_min_override_id propagated from the cart line
-                    // (the audit row was already written at approval time;
-                    // we just store the reference here).
-                    'below_min_override_id' => $belowMinOverrideId,
-                ];
+                // S7: attribute the sold qty to demand item(s) via FIFO.
+                // Returns [] if no open demand item exists (direct
+                // supplier purchase). The resolver atomically bumps
+                // consumed_qty inside this transaction (locks the demand
+                // items FOR UPDATE).
+                $allocations = $this->fifoResolver->consume($branchId, $productId, $lineQty);
+
+                if (empty($allocations)) {
+                    // Single row, no demand-item linkage. The line is
+                    // still created; the report will mark it as
+                    // "direct purchase — cost from products.purchase_rate".
+                    $itemRows[] = [
+                        'sales_invoice_id' => $invoiceId,
+                        'product_id' => $productId,
+                        'warehouse_id' => null,
+                        'qty' => $lineQty,
+                        'rate' => $rate,
+                        'price_min' => $priceMin,
+                        'price_max' => $priceMax,
+                        'price_default' => $priceDef,
+                        'cost_rate' => $costRate > 0 ? $costRate : null,
+                        'price_classification' => $classification,
+                        'branch_demand_item_id' => null,
+                        'below_min_override_id' => $belowMinOverrideId,
+                    ];
+                } else {
+                    // Split the cart line into one sales_invoice_items
+                    // row per demand item allocation. Same rate, same
+                    // invoice, same product — only qty and
+                    // branch_demand_item_id differ. Aggregate queries
+                    // (SUM(qty), SUM(amount)) are unchanged at the
+                    // invoice level.
+                    foreach ($allocations as $alloc) {
+                        $itemRows[] = [
+                            'sales_invoice_id' => $invoiceId,
+                            'product_id' => $productId,
+                            'warehouse_id' => null,
+                            'qty' => $alloc['qty'],
+                            'rate' => $rate,
+                            'price_min' => $priceMin,
+                            'price_max' => $priceMax,
+                            'price_default' => $priceDef,
+                            'cost_rate' => $costRate > 0 ? $costRate : null,
+                            'price_classification' => $classification,
+                            'branch_demand_item_id' => $alloc['demand_item_id'],
+                            'below_min_override_id' => $belowMinOverrideId,
+                        ];
+                    }
+                }
             }
             DB::table('sales_invoice_items')->insert($itemRows);
 

@@ -128,6 +128,9 @@ class BranchDemandService
             ]);
 
             // Create demand items
+            // S7: receiving_branch_id is denormalized here (== from_branch_id
+            // == the branch that will receive the goods and later sell them).
+            // This avoids a JOIN to branch_demands in the FIFO hot path.
             foreach ($items as $item) {
                 DB::table('branch_demand_items')->insert([
                     'branch_demand_id' => $demandId,
@@ -139,6 +142,7 @@ class BranchDemandService
                     'price_min'        => 0,
                     'price_max'        => 0,
                     'price_default'    => 0,
+                    'receiving_branch_id' => $fromBranchId,
                     'notes'            => $item['notes'] ?? null,
                 ]);
             }

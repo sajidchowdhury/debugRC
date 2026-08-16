@@ -21,6 +21,9 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $price_min Minimum price at send time
  * @property string $price_max Maximum price at send time
  * @property string $price_default Default price at send time
+ * @property string $consumed_qty S7: how much of this demand item has been sold by the receiving branch
+ * @property string|null $consumed_qty_updated_at S7: last time consumed_qty was bumped
+ * @property int|null $receiving_branch_id S7: denormalized from branch_demands.from_branch_id for FIFO hot path
  * @property string|null $notes
  */
 class BranchDemandItem extends Model
@@ -45,6 +48,10 @@ class BranchDemandItem extends Model
         'price_min',
         'price_max',
         'price_default',
+        // S7: FIFO consumed_qty + receiving_branch_id denormalization.
+        'consumed_qty',
+        'consumed_qty_updated_at',
+        'receiving_branch_id',
         'notes',
     ];
 
@@ -54,10 +61,12 @@ class BranchDemandItem extends Model
         'price_min' => 'decimal:2',
         'price_max' => 'decimal:2',
         'price_default' => 'decimal:2',
+        'consumed_qty' => 'decimal:3',
         'branch_demand_id' => 'integer',
         'product_id' => 'integer',
         'from_warehouse_id' => 'integer',
         'to_warehouse_id' => 'integer',
+        'receiving_branch_id' => 'integer',
     ];
 
     // ===================== RELATIONSHIPS =====================
