@@ -32,6 +32,18 @@ return Application::configure(basePath: dirname(__DIR__))
         // Phase 11: System Policy — loads current policy (cached) and shares with app.
         $middleware->append(\App\Http\Middleware\CheckSystemPolicy::class);
 
+        // Session 2 — Fiscal Year isolation (Q1 Gap 2).
+        // Resolve + cache the active fiscal year id at request start.
+        // This warms the Redis cache used by BelongsToFiscalYear's
+        // global scope (so the first Eloquent query in a controller
+        // doesn't pay the lookup cost), AND fails fast with a clear
+        // 503 message if no active FY is configured (e.g., immediately
+        // after year-end close, before the next FY is activated).
+        // Exempt paths: /login, /password, /up, /admin/fiscal-years/*
+        // (so the super admin can reach the FY management UI to
+        // activate a new FY even when no active FY currently exists).
+        $middleware->append(\App\Http\Middleware\EnsureActiveFiscalYear::class);
+
         // AUDIT-TRAIL-3 (G-172): block all non-GET requests during INVESTIGATION
         // mode. Runs AFTER CheckSystemPolicy so app('system_policy_mode') is
         // available. Allowlist: auth flows + compliance admin (so superadmin

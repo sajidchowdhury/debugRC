@@ -123,8 +123,22 @@ class AppServiceProvider extends ServiceProvider
         // in those explicit role lists. This single addition fixes the
         // 403 "This action is unauthorized" for superadmin on every
         // $this->authorize() call in every controller.
+        //
+        // Session 2 (FY isolation): AMENDED to explicitly exclude the
+        // `viewHistoricalData` ability from the super-admin bypass.
+        // This is the single most important line of code in the entire
+        // Q1 phase — without it, super admin could read closed/locked
+        // fiscal year data through any code path that calls
+        // Gate::allows('viewHistoricalData', $fy). With the exclusion,
+        // the FiscalYearPolicy::viewHistoricalData() method's
+        // hard-deny (return false) is honored for everyone.
         \Illuminate\Support\Facades\Gate::before(function (\App\Models\User $user, string $ability) {
             if ($user->isSuperadmin()) {
+                // Hard-deny viewHistoricalData even for super admin.
+                // See FiscalYearPolicy::viewHistoricalData() docblock.
+                if (in_array($ability, ['viewHistoricalData'], true)) {
+                    return false;
+                }
                 return true;
             }
         });
@@ -264,6 +278,22 @@ class AppServiceProvider extends ServiceProvider
         \Illuminate\Support\Facades\Gate::policy(
             \App\Models\CommissionEntry::class,
             \App\Policies\CommissionEntryPolicy::class
+        );
+
+        // ============================================================
+        // Session 2 — Fiscal Year isolation (Q1 Gap 2).
+        // Register FiscalYearPolicy. The policy's viewHistoricalData()
+        // method hard-denies for everyone; combined with the
+        // Gate::before() amendment above that excludes that ability
+        // from the super-admin bypass, this is the application-layer
+        // guarantee that no user — not even super admin — can view
+        // closed/locked fiscal year data through the UI. The
+        // BelongsToFiscalYear trait (applied to all operational models)
+        // is the query-layer enforcement.
+        // ============================================================
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\FiscalYear::class,
+            \App\Policies\FiscalYearPolicy::class
         );
     }
 }

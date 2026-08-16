@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 
@@ -32,6 +33,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class SupplierLedger extends Model
 {
+    use BelongsToFiscalYear;
+
     protected $table = 'supplier_ledger';
 
     public $timestamps = false;

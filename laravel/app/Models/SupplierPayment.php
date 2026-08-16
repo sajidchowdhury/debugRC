@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -52,7 +53,7 @@ use App\Models\Scopes\BranchScope;
  */
 class SupplierPayment extends Model
 {
-    use SoftDeletes, AuditableMasterData, ApplySystemPolicyScope;
+    use SoftDeletes, AuditableMasterData, ApplySystemPolicyScope, BelongsToFiscalYear;
 
     protected $table = 'supplier_payments';
 

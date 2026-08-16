@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 
@@ -21,6 +22,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class SalesReturnItem extends Model
 {
+    use BelongsToFiscalYear;
+
     protected $table = 'sales_return_items';
 
     public $timestamps = false;

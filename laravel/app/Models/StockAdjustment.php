@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -60,7 +61,7 @@ class StockAdjustment extends Model
     // table, written explicitly by StockAdjustmentAuditLogger inside the
     // same DB::transaction as each lifecycle transition. See
     // app/Models/StockAdjustmentAuditLog and the auditLogs() relation below.
-    use SoftDeletes, AuditableMasterData;
+    use SoftDeletes, AuditableMasterData, BelongsToFiscalYear;
 
     protected $table = 'stock_adjustments';
 

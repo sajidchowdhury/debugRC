@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Models;
+use App\Models\Concerns\BelongsToFiscalYear;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -71,7 +72,7 @@ use App\Models\Scopes\BranchScope;
  */
 class SalesInvoice extends Model
 {
-    use HasFactory, SoftDeletes, AuditableMasterData, ApplySystemPolicyScope;
+    use HasFactory, SoftDeletes, AuditableMasterData, ApplySystemPolicyScope, BelongsToFiscalYear;
 
     protected $table = 'sales_invoices';
 
