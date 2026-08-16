@@ -90,12 +90,24 @@ return new class extends Migration
             );
 
             // Backfill from the parent demand.
-            $updated = DB::table('branch_demand_items as bdi')
-                ->join('branch_demands as bd', 'bd.id', '=', 'bdi.branch_demand_id')
-                ->whereNull('bdi.receiving_branch_id')
-                ->update([
-                    'bdi.receiving_branch_id' => DB::raw('bd.from_branch_id'),
-                ]);
+            //
+            // NOTE: We deliberately do NOT use Laravel's query-builder
+            // join-update here (DB::table(...)->join(...)->update([...])).
+            // On PostgreSQL, Laravel compiles that pattern into
+            //   UPDATE "t" SET col = bd.x WHERE ctid IN (SELECT ... FROM t JOIN bd ...)
+            // which fails with `missing FROM-clause entry for table "bd"`
+            // because `bd` is only aliased inside the subquery and is not
+            // visible in the outer UPDATE's SET clause. Use PostgreSQL's
+            // native UPDATE ... FROM ... syntax instead — the target table
+            // is NOT re-listed in FROM (only the source table is), and the
+            // join lives in WHERE.
+            $updated = DB::affectingStatement(
+                'UPDATE branch_demand_items AS bdi ' .
+                'SET receiving_branch_id = bd.from_branch_id ' .
+                'FROM branch_demands AS bd ' .
+                'WHERE bd.id = bdi.branch_demand_id ' .
+                'AND bdi.receiving_branch_id IS NULL'
+            );
 
             Log::info('S7: backfilled receiving_branch_id on branch_demand_items.', [
                 'rows_updated' => $updated,
