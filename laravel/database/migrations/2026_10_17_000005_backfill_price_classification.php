@@ -53,23 +53,33 @@ return new class extends Migration
     public function up(): void
     {
         // ── 1. Backfill price_min, price_max, price_default ─────────
-        // Join sales_invoice_items → sales_invoices (for invoice_date) →
-        // product_price_history (effective on invoice_date).
+        // Cross-join sales_invoices + product_price_history in the FROM
+        // clause, then constrain against the UPDATE target (sii) in the
+        // WHERE clause.
+        //
+        // PostgreSQL UPDATE...FROM restriction: the target table (sii)
+        // cannot be referenced inside the FROM clause — including inside
+        // JOIN ON conditions. All references to sii must live in the
+        // WHERE clause. Using an explicit JOIN here would have produced
+        // "invalid reference to FROM-clause entry for table sii" (PG
+        // error 42P01). The comma-separated FROM with WHERE filter is
+        // the canonical PG pattern and produces the same plan.
         //
         // If multiple price history rows are effective on the same date
         // (shouldn't happen given the UNIQUE(product_id, effective_from)
-        // constraint, but defensive), pick the latest effective_from.
+        // constraint, but defensive), this would non-deterministically
+        // pick one — acceptable for backfill since the constraint makes
+        // it a non-issue in practice.
         $priceRowsUpdated = DB::affectingStatement(<<<SQL
 UPDATE sales_invoice_items AS sii
 SET price_min    = pph.min_rate,
     price_max    = pph.max_rate,
     price_default = pph.default_rate
-FROM sales_invoices AS si
-JOIN product_price_history AS pph
-  ON pph.product_id = sii.product_id
- AND pph.effective_from <= si.invoice_date
- AND (pph.effective_to IS NULL OR pph.effective_to >= si.invoice_date)
+FROM sales_invoices AS si, product_price_history AS pph
 WHERE sii.sales_invoice_id = si.id
+  AND pph.product_id = sii.product_id
+  AND pph.effective_from <= si.invoice_date
+  AND (pph.effective_to IS NULL OR pph.effective_to >= si.invoice_date)
   AND sii.price_min IS NULL
   AND sii.price_max IS NULL
   AND sii.price_default IS NULL
