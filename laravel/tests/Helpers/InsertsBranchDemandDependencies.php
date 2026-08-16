@@ -24,6 +24,12 @@ trait InsertsBranchDemandDependencies
     /**
      * Insert a branch_demand_items row with the minimum required columns.
      * Returns the item id.
+     *
+     * Session 1 (FY isolation) added a NOT NULL `fiscal_year_id` column
+     * to `branch_demand_items` (backfilled from the parent demand). The
+     * helper auto-inherits `fiscal_year_id` from the parent
+     * `branch_demands` row — callers don't need to pass it explicitly.
+     * Use `$overrides['fiscal_year_id']` to override.
      */
     protected function insertBranchDemandItem(
         int $demandId,
@@ -34,16 +40,22 @@ trait InsertsBranchDemandDependencies
         ?int $toWarehouseId = null,
         array $overrides = [],
     ): int {
+        // Inherit fiscal_year_id from the parent demand if not explicitly set.
+        if (! isset($overrides['fiscal_year_id'])) {
+            $parentFyId = DB::table('branch_demands')->where('id', $demandId)->value('fiscal_year_id');
+            $overrides['fiscal_year_id'] = $parentFyId;
+        }
+
         return DB::table('branch_demand_items')->insertGetId(array_merge([
-            'branch_demand_id' => $demandId,
-            'product_id'       => $productId,
-            'qty'              => $qty,
-            'cost_rate'        => $costRate,
+            'branch_demand_id'  => $demandId,
+            'product_id'        => $productId,
+            'qty'               => $qty,
+            'cost_rate'         => $costRate,
             'from_warehouse_id' => $fromWarehouseId,
-            'to_warehouse_id'  => $toWarehouseId,
-            'price_min'        => $costRate * 0.9,
-            'price_max'        => $costRate * 1.1,
-            'price_default'    => $costRate,
+            'to_warehouse_id'   => $toWarehouseId,
+            'price_min'         => $costRate * 0.9,
+            'price_max'         => $costRate * 1.1,
+            'price_default'     => $costRate,
         ], $overrides));
     }
 

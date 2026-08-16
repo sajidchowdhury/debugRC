@@ -63,7 +63,7 @@ class BelowMinApprovalServiceTest extends TestCase
             'product_name'  => 'Test Product ' . uniqid(),
             'category_id'   => $categoryId,
             'group_id'      => $groupId,
-            'unit'          => 'PCS',
+            'unit'          => 'Pcs',  // CHECK (unit IN ('Pcs','Carton','KG','Bag','Dobe','Set'))
             'purchase_rate' => $minRate,
             'sales_rate'    => $defaultRate,
             'is_active'     => true,

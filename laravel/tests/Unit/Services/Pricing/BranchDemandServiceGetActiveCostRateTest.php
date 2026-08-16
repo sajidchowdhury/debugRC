@@ -77,7 +77,7 @@ class BranchDemandServiceGetActiveCostRateTest extends TestCase
             'product_name'  => 'Test Product ' . uniqid(),
             'category_id'   => $categoryId,
             'group_id'      => $groupId,
-            'unit'          => 'PCS',
+            'unit'          => 'Pcs',  // CHECK (unit IN ('Pcs','Carton','KG','Bag','Dobe','Set'))
             'purchase_rate' => $purchaseRate,
             'sales_rate'    => $purchaseRate * 1.2,
             'is_active'     => true,

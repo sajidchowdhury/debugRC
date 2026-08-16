@@ -91,18 +91,28 @@ class BranchPnlReportControllerTest extends TestCase
         $response = $this->actingAs($salesman)
             ->get(route('admin.branches.pnl', ['branch' => $branch->id]));
 
-        $response->assertForbidden();
+        // EnsureRole middleware redirects unauthorized non-JSON requests
+        // to dashboard with 302 (see app/Http/Middleware/EnsureRole.php).
+        // The redirect proves the access was denied — the protected route
+        // body never executes.
+        $response->assertRedirect(route('dashboard'));
     }
 
     public function test_cashier_cannot_access_branch_pnl_report(): void
     {
-        $cashier = $this->makeRoleUser('cashier');
+        // The codebase has no 'cashier' role; config/roles.php defines
+        // 10 canonical roles (superadmin, admin, manager, accountant,
+        // salesman, warehouse_manager, dispatcher, hr, user, other).
+        // We use 'user' (the generic operational role) as the second
+        // denied-role test — distinct from salesman to exercise a
+        // different non-admin path.
+        $cashier = $this->makeRoleUser('user');
         $branch = Branch::factory()->create();
 
         $response = $this->actingAs($cashier)
             ->get(route('admin.branches.pnl', ['branch' => $branch->id]));
 
-        $response->assertForbidden();
+        $response->assertRedirect(route('dashboard'));
     }
 
     public function test_unauthenticated_user_redirected_to_login(): void
@@ -126,30 +136,35 @@ class BranchPnlReportControllerTest extends TestCase
     public function test_show_for_demand_returns_403_for_closed_fy_demand_even_for_super_admin(): void
     {
         $superadmin = $this->makeRoleUser('superadmin');
+        $this->actingAs($superadmin);
 
         // Create a closed FY + a demand attached to it.
+        // S1 added NOT NULL `created_by`; reuse the system user id.
+        $sysUserId = DB::table('users')->value('id') ?? 1;
         $closedFyId = DB::table('fiscal_years')->insertGetId([
             'name'             => 'Closed FY ' . uniqid(),
             'fiscal_year_code' => 'FY-' . substr(uniqid(), -6),
             'start_date'       => '2024-01-01',
             'end_date'         => '2024-12-31',
-            'branch_id'        => 1,
+            'branch_id'        => null,  // null = all branches (avoids FK on a non-existent branch)
             'period_type'      => 'monthly',
             'status'           => 'closed',
             'is_current'       => false,
+            'created_by'       => $sysUserId,
             'created_at'       => now(),
             'updated_at'       => now(),
         ]);
 
         $branchA = Branch::factory()->create();
         $branchB = Branch::factory()->create();
+        // insertBranchDemand auto-resolves fiscal_year_id to the active FY;
+        // we then explicitly redirect it to the closed FY for this test.
         $demandId = $this->insertBranchDemand($branchB->id, $branchA->id, 'received');
         DB::table('branch_demands')
             ->where('id', $demandId)
             ->update(['fiscal_year_id' => $closedFyId]);
 
-        $response = $this->actingAs($superadmin)
-            ->get(route('admin.branch-demands.pnl', ['id' => $demandId]));
+        $response = $this->get(route('admin.branch-demands.pnl', ['id' => $demandId]));
 
         $response->assertForbidden();
     }
@@ -162,38 +177,58 @@ class BranchPnlReportControllerTest extends TestCase
     public function test_show_for_demand_returns_200_for_running_fy_demand(): void
     {
         $admin = $this->makeRoleUser('admin');
+        $this->actingAs($admin);
 
-        // Find or create an active FY.
-        $activeFyId = DB::table('fiscal_years')->where('status', 'active')->value('id');
-        if (!$activeFyId) {
-            $activeFyId = DB::table('fiscal_years')->insertGetId([
+        // The controller calls FiscalYearService::getCurrentFiscalYear()
+        // which returns the first FY with is_current=true AND status=active.
+        // Use the SAME service to look up the running FY so the IDs
+        // are guaranteed to match — otherwise the controller's
+        // `demandFyId !== runningFyId` check would fire and call
+        // viewHistoricalData() (which hard-denies for everyone).
+        $fyService = app(\App\Services\Accounting\FiscalYearService::class);
+        $runningFy = $fyService->getCurrentFiscalYear();
+
+        if (!$runningFy) {
+            // No running FY — create one. S1 requires NOT NULL created_by.
+            $sysUserId = DB::table('users')->value('id') ?? 1;
+            $newFyId = DB::table('fiscal_years')->insertGetId([
                 'name'             => 'Active FY ' . uniqid(),
                 'fiscal_year_code' => 'FY-' . substr(uniqid(), -6),
                 'start_date'       => '2025-01-01',
                 'end_date'         => '2025-12-31',
-                'branch_id'        => 1,
+                'branch_id'        => null,
                 'period_type'      => 'monthly',
                 'status'           => 'active',
                 'is_current'       => true,
+                'created_by'       => $sysUserId,
                 'created_at'       => now(),
                 'updated_at'       => now(),
             ]);
+            // Re-fetch via the service so we get the Eloquent model
+            // the controller will see (with all global scopes applied).
+            $runningFy = $fyService->getCurrentFiscalYear();
+            // If still null, the FY we created is being filtered out by
+            // a scope — fall back to direct lookup to at least get an id.
+            if (!$runningFy) {
+                $runningFy = \App\Models\FiscalYear::withoutGlobalScope(\App\Models\Scopes\BranchScope::class)->find($newFyId);
+            }
         }
+
+        $this->assertNotNull($runningFy, 'Test setup failed: no running fiscal year available.');
 
         $branchA = Branch::factory()->create();
         $branchB = Branch::factory()->create();
         $demandId = $this->insertBranchDemand($branchB->id, $branchA->id, 'received');
         DB::table('branch_demands')
             ->where('id', $demandId)
-            ->update(['fiscal_year_id' => $activeFyId]);
+            ->update(['fiscal_year_id' => $runningFy->id]);
 
-        $response = $this->actingAs($admin)
-            ->get(route('admin.branch-demands.pnl', ['id' => $demandId]));
+        $response = $this->get(route('admin.branch-demands.pnl', ['id' => $demandId]));
 
         // 200 OR 404 are both acceptable here — 404 means the demand
-        // was filtered out by the BelongsToFiscalYear scope (the FY
-        // we just created may not have is_current set in a way the
-        // scope accepts). The KEY assertion is: NOT 403.
+        // was filtered out by the BelongsToFiscalYear scope. The KEY
+        // assertion is: NOT 403 (which would mean the FY hard-block
+        // fired for a running-FY demand — a regression).
         $this->assertNotEquals(403, $response->status(), 'Running-FY demand must NOT be 403.');
     }
 
@@ -236,13 +271,16 @@ class BranchPnlReportControllerTest extends TestCase
 
     public function test_export_forbidden_for_cashier(): void
     {
-        $cashier = $this->makeRoleUser('cashier');
+        // 'cashier' is not in config/roles.php — use 'user' (generic
+        // operational role, not in the route's admin/manager/accountant
+        // allowlist) to test denial of the export route.
+        $cashier = $this->makeRoleUser('user');
         $branch = Branch::factory()->create();
 
         $response = $this->actingAs($cashier)
             ->get(route('admin.branches.pnl.export', ['branch' => $branch->id]));
 
-        $response->assertForbidden();
+        $response->assertRedirect(route('dashboard'));
     }
 
     // ===================== Non-existent branch =====================
