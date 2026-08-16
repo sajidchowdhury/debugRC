@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -77,7 +78,6 @@ return new class extends Migration
             //   superseded — a newer verified backup exists for this FY
             //                (file NOT deleted — kept for manual recovery)
             $table->string('status', 20)->default('verified');
-            $table->check("status IN ('verified', 'failed', 'superseded')");
 
             // Error message if status='failed'. Nullable.
             $table->text('error_message')->nullable();
@@ -88,10 +88,23 @@ return new class extends Migration
             $table->index(['fiscal_year_id', 'status'], 'idx_db_backups_fy_status');
             $table->index('created_at', 'idx_db_backups_created_at');
         });
+
+        // CHECK constraint added via raw SQL — Blueprint::check() is not
+        // available on all Laravel 12.x minor releases (added in 12.x
+        // but missing from earlier patches). Using ALTER TABLE works on
+        // every version and produces the same PostgreSQL constraint.
+        DB::statement(
+            "ALTER TABLE database_backups " .
+            "ADD CONSTRAINT db_backups_status_check " .
+            "CHECK (status IN ('verified', 'failed', 'superseded'))"
+        );
     }
 
     public function down(): void
     {
+        // Drop the CHECK constraint before dropping the table — symmetric
+        // teardown, also makes the migration reversible on PG.
+        DB::statement('ALTER TABLE database_backups DROP CONSTRAINT IF EXISTS db_backups_status_check');
         Schema::dropIfExists('database_backups');
     }
 };
