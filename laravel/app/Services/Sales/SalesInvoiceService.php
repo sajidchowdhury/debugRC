@@ -239,6 +239,14 @@ class SalesInvoiceService
                 $priceDef  = isset($item['default_rate']) ? (float) $item['default_rate'] : null;
                 $costRate  = $productCosts[$productId] ?? null;
 
+                // S6: read the below-min override id from the cart line.
+                // Was set by SalesCartService::addItem() when the cashier
+                // supplied an admin-approved override id. NULL for normal
+                // (within-range) lines.
+                $belowMinOverrideId = isset($item['below_min_override_id']) && $item['below_min_override_id']
+                    ? (int) $item['below_min_override_id']
+                    : null;
+
                 $classification = null;
                 if ($priceMin !== null && $priceMax !== null && $priceDef !== null) {
                     $classification = PriceClassifier::classify(
@@ -248,6 +256,18 @@ class SalesInvoiceService
                         $priceDef,
                         $costRate
                     );
+                }
+
+                // S6: if the line has a below-min override, force the
+                // classification to 'below_min'. PriceClassifier already
+                // returns 'below_min' for rates < min - 0.01, but we
+                // force it here as defense-in-depth in case the rate is
+                // exactly at min - 0.005 (within the EPSILON tolerance)
+                // and the classifier returns 'min' instead of 'below_min'.
+                // The override id is the source of truth: if it's set,
+                // the line is a below-min sale, period.
+                if ($belowMinOverrideId !== null) {
+                    $classification = 'below_min';
                 }
 
                 $itemRows[] = [
@@ -264,7 +284,10 @@ class SalesInvoiceService
                     'cost_rate' => $costRate > 0 ? $costRate : null,
                     'price_classification' => $classification,
                     // branch_demand_item_id: populated in Session 7 (FIFO linkage).
-                    // below_min_override_id: populated in Session 6 (admin override).
+                    // S6: below_min_override_id propagated from the cart line
+                    // (the audit row was already written at approval time;
+                    // we just store the reference here).
+                    'below_min_override_id' => $belowMinOverrideId,
                 ];
             }
             DB::table('sales_invoice_items')->insert($itemRows);
@@ -667,6 +690,16 @@ class SalesInvoiceService
                 $priceDef  = isset($item['default_rate']) ? (float) $item['default_rate'] : null;
                 $costRate  = $productCosts[$productId] ?? null;
 
+                // S6: read the below-min override id from the edited item.
+                // The edit form may pass `below_min_override_id` directly
+                // (for an existing below-min line) or omit it (for normal
+                // lines). If a below-min rate is supplied without an
+                // override id, that's a validation error caught upstream
+                // by the controller's validation rules.
+                $belowMinOverrideId = isset($item['below_min_override_id']) && $item['below_min_override_id']
+                    ? (int) $item['below_min_override_id']
+                    : null;
+
                 $classification = null;
                 if ($priceMin !== null && $priceMax !== null && $priceDef !== null) {
                     $classification = PriceClassifier::classify(
@@ -676,6 +709,11 @@ class SalesInvoiceService
                         $priceDef,
                         $costRate
                     );
+                }
+
+                // S6: force 'below_min' classification when an override id is present.
+                if ($belowMinOverrideId !== null) {
+                    $classification = 'below_min';
                 }
 
                 $itemRows[] = [
@@ -691,6 +729,8 @@ class SalesInvoiceService
                     'price_default' => $priceDef,
                     'cost_rate' => $costRate > 0 ? $costRate : null,
                     'price_classification' => $classification,
+                    // S6: propagate the override id from the edit payload.
+                    'below_min_override_id' => $belowMinOverrideId,
                 ];
             }
             DB::table('sales_invoice_items')->insert($itemRows);

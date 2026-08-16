@@ -48,7 +48,8 @@ class SalesCartService
     public function __construct(
         private StockAvailabilityService $availabilityService,
         private StockService $stockService,
-        private SalesAuditLogger $auditLogger
+        private SalesAuditLogger $auditLogger,
+        private BelowMinApprovalService $belowMinApproval
     ) {}
 
     /**
@@ -81,20 +82,40 @@ class SalesCartService
     /**
      * Add a product to the cart. Merges if same product + same rate.
      *
+     * Session 6: if the rate is below the product's min_rate, the
+     * caller MUST pass `below_min_override_id` — the audit-log row id
+     * returned by BelowMinApprovalService::approve(). Without it, the
+     * below-min rate is hard-blocked (legacy behavior). With it, the
+     * line is added with `below_min_override_id` stored in items_json
+     * and the rate-error is suppressed in validateCartItems().
+     *
+     * The `below_min_override_id` is propagated to
+     * sales_invoice_items.below_min_override_id at finalize time by
+     * SalesInvoiceService::finalizeFromCart().
+     *
      * @param int $userId
      * @param int $customerId
      * @param int $branchId
-     * @param array $item { product_id, qty, rate, product_name? }
+     * @param array $item {
+     *     product_id: int,
+     *     qty: float,
+     *     rate: float,
+     *     product_name?: string,
+     *     below_min_override_id?: int|null  (S6 — audit-log row id)
+     * }
      * @param int|null $excludeInvoiceId
      * @return array{ status: string, message: string, cart: array }
      * @throws \InvalidArgumentException If qty/rate invalid.
-     * @throws \RuntimeException If price out of range or insufficient stock.
+     * @throws \RuntimeException If price out of range without override, or insufficient stock.
      */
     public function addItem(int $userId, int $customerId, int $branchId, array $item, ?int $excludeInvoiceId = null): array
     {
         $productId = (int) ($item['product_id'] ?? 0);
         $qty = (float) ($item['qty'] ?? 0);
         $rate = (float) ($item['rate'] ?? 0);
+        $belowMinOverrideId = isset($item['below_min_override_id'])
+            ? (int) $item['below_min_override_id']
+            : null;
 
         if ($productId <= 0) {
             throw new \InvalidArgumentException('product_id is required.');
@@ -107,11 +128,42 @@ class SalesCartService
         }
 
         // Validate price range (from product_price_history).
+        // S6: if the rate is below min AND a below_min_override_id is
+        // supplied, allow the line through (the override was already
+        // audited by BelowMinApprovalService::approve()). Without the
+        // override id, hard-block as before.
+        //
+        // Note: we still hard-block rates ABOVE max — there's no
+        // "above-max override" flow (overcharging is not a business
+        // case worth auditing; the customer just pays more).
         $priceRange = $this->getProductPriceRange($productId);
-        if ($priceRange && ($rate < $priceRange['min_rate'] - 0.01 || $rate > $priceRange['max_rate'] + 0.01)) {
-            throw new \RuntimeException(
-                "Rate {$rate} is out of allowed range ({$priceRange['min_rate']} - {$priceRange['max_rate']})."
-            );
+        if ($priceRange) {
+            $belowMin = $rate < $priceRange['min_rate'] - 0.01;
+            $aboveMax = $rate > $priceRange['max_rate'] + 0.01;
+
+            if ($belowMin && $belowMinOverrideId === null) {
+                throw new \RuntimeException(
+                    "Rate {$rate} is below the minimum ({$priceRange['min_rate']}). "
+                    . "An admin/manager override is required."
+                );
+            }
+            if ($belowMin && $belowMinOverrideId !== null) {
+                // Validate the override id points to a real audit row.
+                // This is defense-in-depth: the JS only passes an id
+                // returned by /admin/sales/below-min-approvals, but a
+                // malicious client could send a fake id. We re-check
+                // here so the cart never stores a dangling reference.
+                if (!$this->belowMinApproval->isValidOverride($belowMinOverrideId)) {
+                    throw new \RuntimeException(
+                        "Invalid below-min override id {$belowMinOverrideId} — audit row not found."
+                    );
+                }
+            }
+            if ($aboveMax) {
+                throw new \RuntimeException(
+                    "Rate {$rate} is above the maximum ({$priceRange['max_rate']})."
+                );
+            }
         }
 
         $cart = SalesDraftCart::getOrCreate($userId, $customerId, $branchId);
@@ -145,7 +197,20 @@ class SalesCartService
                 'max_rate' => $priceRange['max_rate'] ?? null,
                 'default_rate' => $priceRange['default_rate'] ?? null,
                 'warehouse_id' => null,
+                // S6: store the audit-log row id on the cart line so it
+                // propagates to sales_invoice_items at finalize time.
+                'below_min_override_id' => $belowMinOverrideId,
             ];
+        } else {
+            // S6: if merging into an existing line, preserve the
+            // existing override id (the line was already approved at
+            // the original rate; a qty bump doesn't need re-approval).
+            // If the existing line had no override but the new add
+            // supplies one (unusual — the rate is the same, so the
+            // override status should match), prefer the existing
+            // value to avoid surprising the cashier.
+            // We do NOT set below_min_override_id here — it's already
+            // on the line from the original add.
         }
 
         // Validate availability before saving.
@@ -179,6 +244,13 @@ class SalesCartService
     /**
      * Update qty or rate for a product in the cart.
      *
+     * Session 6: if the rate is being changed to a below-min value,
+     * the caller MUST supply `below_min_override_id`. If the rate is
+     * unchanged (only qty change), the existing override id is
+     * preserved. If the rate is changed to a within-range value, any
+     * existing override id is cleared (the override is no longer
+     * needed and should not propagate to the sale line).
+     *
      * @param int $userId
      * @param int $customerId
      * @param int $branchId
@@ -186,9 +258,10 @@ class SalesCartService
      * @param float $qty
      * @param float|null $rate (null = keep existing rate)
      * @param int|null $excludeInvoiceId
+     * @param int|null $belowMinOverrideId (S6 — required if rate < min)
      * @return array
      */
-    public function updateItem(int $userId, int $customerId, int $branchId, int $productId, float $qty, ?float $rate = null, ?int $excludeInvoiceId = null): array
+    public function updateItem(int $userId, int $customerId, int $branchId, int $productId, float $qty, ?float $rate = null, ?int $excludeInvoiceId = null, ?int $belowMinOverrideId = null): array
     {
         if ($qty <= 0) {
             throw new \InvalidArgumentException('qty must be positive.');
@@ -207,6 +280,26 @@ class SalesCartService
                 $items[$idx]['qty'] = $qty;
                 if ($rate !== null) {
                     $items[$idx]['rate'] = $rate;
+                    // S6: handle override-id lifecycle on rate change.
+                    $priceRange = $this->getProductPriceRange($productId);
+                    if ($priceRange && $rate < $priceRange['min_rate'] - 0.01) {
+                        // New rate is below min — require an override id.
+                        if ($belowMinOverrideId === null) {
+                            throw new \RuntimeException(
+                                "Rate {$rate} is below the minimum ({$priceRange['min_rate']}). "
+                                . "An admin/manager override is required."
+                            );
+                        }
+                        if (!$this->belowMinApproval->isValidOverride($belowMinOverrideId)) {
+                            throw new \RuntimeException(
+                                "Invalid below-min override id {$belowMinOverrideId} — audit row not found."
+                            );
+                        }
+                        $items[$idx]['below_min_override_id'] = $belowMinOverrideId;
+                    } else {
+                        // New rate is within range — clear any stale override id.
+                        $items[$idx]['below_min_override_id'] = null;
+                    }
                 }
                 $items[$idx]['total'] = round($items[$idx]['qty'] * $items[$idx]['rate'], 2);
                 $found = true;
@@ -542,6 +635,11 @@ class SalesCartService
     /**
      * Validate cart items: check stock availability + price ranges.
      *
+     * Session 6: a line with `below_min_override_id` set is EXEMPT
+     * from the below-min rate-error. The override was already
+     * approved and audited; the rate is allowed to be below min.
+     * Above-max rates are still hard-blocked (no above-max override).
+     *
      * @param array $items
      * @param int|null $branchId
      * @param int|null $excludeInvoiceId
@@ -560,6 +658,9 @@ class SalesCartService
             $productId = (int) ($item['product_id'] ?? 0);
             $qty = (float) ($item['qty'] ?? 0);
             $rate = (float) ($item['rate'] ?? 0);
+            $belowMinOverrideId = isset($item['below_min_override_id'])
+                ? (int) $item['below_min_override_id']
+                : null;
 
             if ($productId <= 0) continue;
 
@@ -578,15 +679,34 @@ class SalesCartService
             }
 
             // Check price range.
+            // S6: skip the below-min check if the line has an override id.
+            // Above-max is always hard-blocked.
             $priceRange = $this->getProductPriceRange($productId);
-            if ($priceRange && ($rate < $priceRange['min_rate'] - 0.01 || $rate > $priceRange['max_rate'] + 0.01)) {
-                $rateErrors[] = [
-                    'product_id' => $productId,
-                    'product_name' => $item['product_name'] ?? "Product #{$productId}",
-                    'rate' => $rate,
-                    'min_rate' => $priceRange['min_rate'],
-                    'max_rate' => $priceRange['max_rate'],
-                ];
+            if ($priceRange) {
+                $belowMin = $rate < $priceRange['min_rate'] - 0.01;
+                $aboveMax = $rate > $priceRange['max_rate'] + 0.01;
+
+                if ($aboveMax) {
+                    $rateErrors[] = [
+                        'product_id' => $productId,
+                        'product_name' => $item['product_name'] ?? "Product #{$productId}",
+                        'rate' => $rate,
+                        'min_rate' => $priceRange['min_rate'],
+                        'max_rate' => $priceRange['max_rate'],
+                        'error_type' => 'above_max',
+                    ];
+                } elseif ($belowMin && $belowMinOverrideId === null) {
+                    // Below min WITHOUT override — hard-block.
+                    $rateErrors[] = [
+                        'product_id' => $productId,
+                        'product_name' => $item['product_name'] ?? "Product #{$productId}",
+                        'rate' => $rate,
+                        'min_rate' => $priceRange['min_rate'],
+                        'max_rate' => $priceRange['max_rate'],
+                        'error_type' => 'below_min_no_override',
+                    ];
+                }
+                // Below min WITH override → no error (line is approved).
             }
         }
 
@@ -609,6 +729,10 @@ class SalesCartService
 
     /**
      * Enrich cart items with price range + availability data.
+     *
+     * Session 6: preserves the `below_min_override_id` field if set
+     * on the stored cart line (it's added by addItem() when an admin
+     * override is supplied). Old cart rows without the field get NULL.
      */
     private function enrichItems(array $items, ?int $branchId, ?int $excludeInvoiceId): array
     {
@@ -630,6 +754,12 @@ class SalesCartService
             if ($branchId > 0) {
                 $item['available_qty'] = $this->availabilityService->getBranchAvailableQty($productId, $branchId, $excludeInvoiceId);
             }
+
+            // S6: normalize below_min_override_id to int|null so the JS
+            // and downstream finalize logic get a consistent type.
+            $item['below_min_override_id'] = isset($item['below_min_override_id']) && $item['below_min_override_id']
+                ? (int) $item['below_min_override_id']
+                : null;
 
             // Recalculate total.
             $item['total'] = round((float) ($item['qty'] ?? 0) * (float) ($item['rate'] ?? 0), 2);
