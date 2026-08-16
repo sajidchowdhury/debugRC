@@ -41,13 +41,24 @@ use Illuminate\Support\Facades\Schema;
  * (FIFO linkage). Creating the columns now means S6 and S7 don't need
  * a schema change, only an UPDATE.
  *
- * FK strategy: both FK columns reference parent tables that are NOT
- * partitioned (branch_demand_items IS partitioned — wait, actually
- * `branch_demand_items` is NOT in the partitioned_tables list in
- * config/fiscal.php, it's a child of `branch_demands` which is also
- * not partitioned). So standard declarative FKs work. `user_audit_log`
- * IS partitioned (RANGE by created_at) — but PostgreSQL supports FKs
- * TO a partitioned table since PG 12, so this is fine.
+ * FK strategy: `branch_demand_items` is NOT partitioned (it's a child of
+ * `branch_demands` which is also not partitioned — see config/fiscal.php),
+ * so a standard declarative FK on `branch_demand_item_id` works fine.
+ *
+ * `user_audit_log` IS partitioned (RANGE by `created_at`) — and PostgreSQL
+ * requires the partition key to be part of any unique constraint on a
+ * partitioned table. So `user_audit_log` only has PRIMARY KEY (id, created_at),
+ * NOT a unique constraint on `id` alone. That makes a declarative FK from
+ * `sales_invoice_items(below_min_override_id)` to `user_audit_log(id)`
+ * impossible (PG error 42830: "no unique constraint matching given keys").
+ *
+ * We therefore leave `below_min_override_id` as a plain bigint with NO
+ * declarative FK — a soft reference. The S6 override flow is responsible
+ * for inserting the audit row FIRST, capturing its id, and only then
+ * writing that id into `sales_invoice_items.below_min_override_id`.
+ * Referential integrity is enforced at the application layer, not by PG.
+ * This matches the compliance-audit pattern: audit rows are never deleted
+ * (so ON DELETE SET NULL would never fire anyway).
  *
  * @see \App\Support\PriceClassifier
  * @see \App\Services\Sales\SalesInvoiceService::finalizeFromCart()
@@ -122,21 +133,14 @@ return new class extends Migration
         }
 
         // 7. below_min_override_id — populated in Session 6 (admin override).
-        //    FK to user_audit_log(id) ON DELETE SET NULL — the audit log
-        //    is rarely deleted (compliance), but if it is, the sale line
-        //    keeps its classification but loses the audit linkage.
+        //    Plain bigint column, NO declarative FK — see class docblock:
+        //    user_audit_log is partitioned (RANGE by created_at) so its PK
+        //    is (id, created_at), and a FK to (id) alone is impossible.
+        //    S6 enforces referential integrity at the application layer.
         if (!Schema::hasColumn('sales_invoice_items', 'below_min_override_id')) {
             DB::statement(
                 'ALTER TABLE sales_invoice_items ADD COLUMN below_min_override_id bigint'
             );
-            $ualExists = DB::selectOne("SELECT to_regclass('public.user_audit_log') AS reg");
-            if ($ualExists && $ualExists->reg !== null) {
-                DB::statement(
-                    'ALTER TABLE sales_invoice_items ' .
-                    'ADD CONSTRAINT sii_ual_fk FOREIGN KEY (below_min_override_id) ' .
-                    'REFERENCES user_audit_log(id) ON DELETE SET NULL'
-                );
-            }
         }
 
         // Index for the S6 / S7 queries: "find all sale lines with no
@@ -162,7 +166,9 @@ return new class extends Migration
         DB::statement('DROP INDEX IF EXISTS idx_sii_classification');
         DB::statement('DROP INDEX IF EXISTS idx_sii_bdi_null');
 
-        // Drop FK constraints, then columns.
+        // Drop FK constraint (only sii_bdi_fk — sii_ual_fk was never created
+        // because user_audit_log is partitioned and has no unique constraint
+        // on id alone; see up() docblock).
         DB::statement('ALTER TABLE sales_invoice_items DROP CONSTRAINT IF EXISTS sii_ual_fk');
         DB::statement('ALTER TABLE sales_invoice_items DROP CONSTRAINT IF EXISTS sii_bdi_fk');
 
