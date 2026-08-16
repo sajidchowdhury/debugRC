@@ -842,24 +842,39 @@ class BranchDemandService
     }
 
     /**
-     * Session 5 — Get the active (oldest open, FIFO) cost_rate for a
-     * product in a branch.
+     * Session 5 / Session 9 fix — Get the active (oldest open, FIFO)
+     * cost_rate for a product in a branch.
      *
      * Used by {@see \App\Services\Sales\SalesInvoiceService::finalizeFromCart()}
      * to populate `sales_invoice_items.cost_rate` at finalize time. The
      * cost_rate is the locked inter-branch transfer cost — the rate the
-     * SUPPLYING branch charged the SELLING branch when the goods were
+     * SUPPLYING branch charged the RECEIVING branch when the goods were
      * dispatched via a branch demand.
      *
+     * Branch-semantics reminder (see class docblock lines 42-43):
+     *   - `from_branch_id` = requester / RECEIVER of goods (debtor) —
+     *     this is the branch that LATER SELLS the goods to customers.
+     *   - `to_branch_id`   = supplier (creditor) — the branch that
+     *     DISPATCHED the goods.
+     *
+     * The `$branchId` parameter is the SELLING branch — which is the
+     * branch that RECEIVED goods via a demand, i.e. `from_branch_id`.
+     * The S7 migration denormalized this onto each `branch_demand_items`
+     * row as `receiving_branch_id` for fast FIFO lookup.
+     *
      * FIFO logic: among all `branch_demand_items` rows where
-     *   - the demand's `to_branch_id` = $branchId (the branch that
+     *   - `bdi.receiving_branch_id` = $branchId (the branch that
      *     received the goods — i.e., the selling branch in this context),
-     *   - the demand's `status` = 'received' (goods have been confirmed
-     *     as received by the selling branch),
+     *   - the parent demand's `status` = 'received' (goods have been
+     *     confirmed as received by the selling branch — see
+     *     `confirmReceipt()` authorization at L631 which enforces
+     *     `from_branch_id === $branchId`),
      *   - the product matches,
-     *   - the demand item still has un-consumed qty (best-effort — we
-     *     don't track consumption yet; that lands in Session 7 with the
-     *     FIFO linkage),
+     *   - the demand item still has un-consumed qty
+     *     (`consumed_qty < qty` — added in S7; uses the partial index
+     *     `idx_bdi_fifo_open` for fast lookup),
+     *   - `cost_rate > 0` (skip zero-cost snapshots from suppliers
+     *     whose `avg_cost` was zero at send time),
      * we pick the OLDEST one (lowest demand_date, then lowest id) and
      * return its `cost_rate`.
      *
@@ -873,19 +888,46 @@ class BranchDemandService
      * when this returns NULL — the report still works, just with a less
      * precise cost figure.
      *
-     * @param  int      $branchId   The selling branch (demand's to_branch_id).
+     * ── S9 fix history ──
+     * Session 5 originally filtered on `bd.to_branch_id = $branchId`,
+     * which is the SUPPLIER, not the receiver. This returned the cost
+     * OTHER branches paid when THIS branch supplied them — the wrong
+     * cost for the selling branch's own sales. Session 9 corrects the
+     * filter to `bdi.receiving_branch_id = $branchId` (the receiver,
+     * denormalized from `from_branch_id` in S7) and adds the
+     * `consumed_qty < qty` filter (possible only after S7 added the
+     * `consumed_qty` column). Historical `sales_invoice_items.cost_rate`
+     * values populated by the buggy S5 logic are re-derived from the
+     * S7-linked `branch_demand_items.cost_rate` by migration
+     * `2026_10_18_000009_audit_and_correct_historical_cost_snapshots`.
+     *
+     * @see \App\Services\DemandItemFifoResolver::consume()
+     * @see database/migrations/2026_10_18_000007_add_consumed_qty_to_branch_demand_items.php
+     * @see database/migrations/2026_10_18_000009_audit_and_correct_historical_cost_snapshots.php
+     *
+     * @param  int      $branchId   The selling branch (demand's from_branch_id,
+     *                              denormalized as bdi.receiving_branch_id).
      * @param  int      $productId  The product being sold.
      * @return float|null           The locked cost_rate, or NULL if no
      *                              matching open demand item exists.
      */
     public function getActiveCostRate(int $branchId, int $productId): ?float
     {
+        // S9 fix: filter on bdi.receiving_branch_id (== from_branch_id ==
+        // the requester/receiver/seller), NOT bd.to_branch_id (supplier).
+        // The denormalized column lets us use the S7 partial FIFO index
+        // `idx_bdi_fifo_open` (covering WHERE receiving_branch_id, product_id
+        // AND consumed_qty < qty) without joining the parent table just for
+        // the branch filter. We still join branch_demands for the
+        // `status='received'` + `demand_date` ordering filters.
         $row = \Illuminate\Support\Facades\DB::table('branch_demand_items as bdi')
             ->join('branch_demands as bd', 'bd.id', '=', 'bdi.branch_demand_id')
-            ->where('bd.to_branch_id', $branchId)
+            ->where('bdi.receiving_branch_id', $branchId)
             ->where('bd.status', 'received')
+            ->where('bd.is_reversed', false)
             ->where('bdi.product_id', $productId)
             ->where('bdi.cost_rate', '>', 0)
+            ->whereColumn('bdi.consumed_qty', '<', 'bdi.qty')
             ->orderBy('bd.demand_date', 'asc')
             ->orderBy('bdi.id', 'asc')
             ->select('bdi.cost_rate')
