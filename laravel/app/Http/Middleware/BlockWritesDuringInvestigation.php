@@ -83,7 +83,23 @@ class BlockWritesDuringInvestigation
 
         // 3. Check the active system policy mode (warmed by CheckSystemPolicy
         //    middleware which runs BEFORE this one in the global stack).
-        $mode = app('system_policy_mode');
+        //
+        //    DEFENSE-IN-DEPTH (fail-open): if the upstream CheckSystemPolicy
+        //    middleware failed to register the `system_policy_mode` binding
+        //    (e.g. SystemPolicyService::getCurrentPolicy() threw on an empty
+        //    system_policies table in test/fresh-install environments), we
+        //    treat the mode as 'NORMAL' and allow the write through. This
+        //    mirrors the documented fail-open posture of SystemPolicyService
+        //    itself: "Worst case = INVESTIGATION mode temporarily does not
+        //    block writes, which is preferable to a total GL posting
+        //    failure." Locking up every POST/PUT/DELETE in the app with a
+        //    500 because of a missing container binding is far worse than
+        //    temporarily not blocking writes when no policy is configured.
+        if (app()->bound('system_policy_mode')) {
+            $mode = app('system_policy_mode');
+        } else {
+            $mode = 'NORMAL';
+        }
         if ($mode === 'INVESTIGATION') {
             throw new SystemPolicyWriteBlockedException(
                 $mode,

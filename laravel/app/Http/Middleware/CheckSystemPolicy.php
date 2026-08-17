@@ -33,8 +33,25 @@ class CheckSystemPolicy
     public function handle(Request $request, Closure $next): Response
     {
         // Load current policy (cached — O(1) on normal requests).
-        $policy = $this->policyService->getCurrentPolicy();
-        $mode = $this->policyService->getCurrentMode();
+        //
+        // DEFENSE-IN-DEPTH: if the underlying service call throws (cache
+        // outage, DB unavailable, empty system_policies table in a fresh
+        // test environment), fall back to NORMAL mode so downstream
+        // middleware (BlockWritesDuringInvestigation) still has the
+        // `system_policy_mode` binding to read. Locking up every
+        // request because the policy lookup failed is far worse than
+        // temporarily running unbridled — matches the documented
+        // fail-open posture of SystemPolicyService itself.
+        try {
+            $policy = $this->policyService->getCurrentPolicy();
+            $mode = $this->policyService->getCurrentMode();
+        } catch (\Throwable $e) {
+            $policy = null;
+            $mode = 'NORMAL';
+            \Illuminate\Support\Facades\Log::warning('CheckSystemPolicy: failed to load policy, defaulting to NORMAL', [
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         // Share with the application.
         app()->instance('system_policy', $policy);
