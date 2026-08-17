@@ -81,7 +81,18 @@ class SupplierCrudTest extends TestCase
 
     public function test_index_data_tables_endpoint_returns_branch_name(): void
     {
-        $branch = Branch::factory()->create();
+        // RLS policy on suppliers (database/sql/07 line 527) reads
+        // `current_setting('app.branch_id')` which SetAppBranchId sets
+        // from session('branch_id') ?? Auth::user()->getBranchId().
+        // If we create the supplier in a fresh Branch, RLS hides it
+        // from the DataTables response because the admin's GUC points
+        // at the admin's own branch. Reuse the admin's branch_id so
+        // the just-created supplier is visible through RLS.
+        $adminBranchId = \Illuminate\Support\Facades\Auth::user()?->getBranchId();
+        $branch = $adminBranchId
+            ? Branch::findOrFail($adminBranchId)
+            : Branch::factory()->create();
+
         $supplier = Supplier::factory()->forBranch($branch->id)->create();
 
         $response = $this->get(route('admin.suppliers.index', ['draw' => 1, 'start' => 0, 'length' => 25]));

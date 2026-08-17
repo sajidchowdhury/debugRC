@@ -49,6 +49,16 @@ abstract class TestCase extends BaseTestCase
             // 500 crash on missing `system_policy_mode` binding — now that
             // middleware fails-open, CSRF is the next gate the request hits.)
             \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class,
+            // EnsureActiveFiscalYear: the global middleware fails-closed with
+            // 503 when no active FY exists. In tests where no FY is seeded
+            // (e.g. SupplierRbacTest::test_unauthenticated_json_request_returns_401
+            // — the request never reaches the auth guard because this middleware
+            // throws first), the 503 path also drags in Cache::remember +
+            // exception renderer, producing 500 instead. Tests that genuinely
+            // need an active FY use the ResolvesActiveFiscalYear trait to
+            // insert one; this middleware is therefore pure friction in the
+            // test environment.
+            \App\Http\Middleware\EnsureActiveFiscalYear::class,
         ]);
 
         // Ensure tests always run as if on the web guard.

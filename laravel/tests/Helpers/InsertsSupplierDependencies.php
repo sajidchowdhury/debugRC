@@ -81,9 +81,11 @@ trait InsertsSupplierDependencies
     /**
      * Insert a purchase_order row referencing a supplier.
      *
-     * Builds the minimum chain: supplier → PO.
+     * Builds the minimum chain: supplier → PO (with a Warehouse for the
+     * branch, since purchase_orders.warehouse_id is NOT NULL per
+     * database/sql/05_purchase.sql line ~40).
      * Schema requires po_code (UK), po_date, supplier_id (FK), branch_id (FK),
-     * status CHECK in (draft/sent/partial/received/cancelled).
+     * warehouse_id (FK, NOT NULL), status CHECK in (draft/sent/partial/received/cancelled).
      *
      * @param  string  $status  One of draft/sent/partial/received/cancelled.
      * @return int  The purchase_orders.id
@@ -93,11 +95,25 @@ trait InsertsSupplierDependencies
         int $branchId,
         string $status = 'draft',
     ): int {
+        // Resolve (or lazily create) a Warehouse for this branch so the
+        // NOT NULL warehouse_id constraint is satisfied. Reuses an
+        // existing warehouse if one already exists for the branch.
+        $warehouseId = DB::table('warehouses')->where('branch_id', $branchId)->value('id')
+            ?: DB::table('warehouses')->insertGetId([
+                'warehouse_code' => 'WH-PO-' . substr(uniqid(), -6),
+                'warehouse_name' => 'PO helper warehouse ' . substr(uniqid(), -4),
+                'branch_id'      => $branchId,
+                'is_active'      => true,
+                'created_at'     => now(),
+                'updated_at'     => now(),
+            ]);
+
         return DB::table('purchase_orders')->insertGetId([
             'po_code'     => 'PO-SUP-' . substr(uniqid(), -6),
             'po_date'     => now()->toDateString(),
             'supplier_id' => $supplierId,
             'branch_id'   => $branchId,
+            'warehouse_id'=> $warehouseId,
             'status'      => $status,
             'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'  => now(),
