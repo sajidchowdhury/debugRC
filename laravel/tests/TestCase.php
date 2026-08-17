@@ -43,6 +43,12 @@ abstract class TestCase extends BaseTestCase
             \App\Http\Middleware\SyncLegacySession::class,
             \App\Http\Middleware\CheckCredentialVersion::class,
             \App\Http\Middleware\CheckSystemPolicy::class,
+            // Laravel 12 CSRF guard. Tests don't issue real browser tokens,
+            // so POST/PUT/DELETE in feature tests would 419 without this.
+            // (Previous behaviour was masked by the BlockWritesDuringInvestigation
+            // 500 crash on missing `system_policy_mode` binding — now that
+            // middleware fails-open, CSRF is the next gate the request hits.)
+            \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class,
         ]);
 
         // Ensure tests always run as if on the web guard.
