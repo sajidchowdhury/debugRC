@@ -122,6 +122,7 @@ trait InsertsWarehouseDependencies
         DB::table('stock_take_warehouses')->insert([
             'stock_take_session_id' => $sessionId,
             'warehouse_id'          => $warehouseId,
+            'branch_id'             => $branchId,
             'fiscal_year_id'        => $fyId,
         ]);
 

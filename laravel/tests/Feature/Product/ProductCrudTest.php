@@ -88,9 +88,24 @@ class ProductCrudTest extends TestCase
     {
         $category = ProductCategory::factory()->create();
         $group = ProductGroup::factory()->create();
-        $product = Product::factory()->forCategory($category->id)->forGroup($group->id)->create();
+        // Unique searchable product_name + search.value filter so the
+        // DataTables response narrows to JUST this product, regardless
+        // of how much seeded baseline data already exists in the test DB
+        // (the table has 1000+ seeded products; without a search filter,
+        // our just-created product lands past the length=25 first page).
+        // Mirrors the fix applied to SupplierCrudTest in commit ee6341d.
+        $searchToken = 'DATATABLE_PRODUCT_LOOKUP_' . substr(uniqid(), -6);
+        $product = Product::factory()
+            ->forCategory($category->id)
+            ->forGroup($group->id)
+            ->create(['product_name' => $searchToken]);
 
-        $response = $this->get(route('admin.products.index', ['draw' => 1, 'start' => 0, 'length' => 25]));
+        $response = $this->get(route('admin.products.index', [
+            'draw'   => 1,
+            'start'  => 0,
+            'length' => 25,
+            'search' => ['value' => $searchToken],
+        ]));
 
         $response->assertOk();
         $data = $response->json('data');

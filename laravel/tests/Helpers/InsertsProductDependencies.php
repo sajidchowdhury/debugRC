@@ -100,12 +100,15 @@ trait InsertsProductDependencies
             'updated_at'   => now(),
         ]);
 
+        // NOTE: sales_invoice_items no longer has a condition_state column.
+        // database/sql/04_sales.sql line 115 documents that the column was
+        // DROPPED in G-160 (SALES-AUDIT-2) — damage tracking moved to
+        // sales_return_items.condition_state + damage_invoices.
         return DB::table('sales_invoice_items')->insertGetId([
             'sales_invoice_id' => $invoiceId,
             'product_id'       => $productId,
             'qty'              => 1,
             'rate'             => 10.00,
-            'condition_state'  => 'Good',
             'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
         ]);
     }
@@ -127,12 +130,27 @@ trait InsertsProductDependencies
             'updated_at'    => now(),
         ]);
 
+        // Resolve (or lazily create) a Warehouse for this branch so the
+        // NOT NULL warehouse_id constraint on purchase_orders is
+        // satisfied (database/sql/05_purchase.sql line ~40). Mirrors the
+        // fix applied to InsertsSupplierDependencies in commit b6f466f.
+        $warehouseId = DB::table('warehouses')->where('branch_id', $branchId)->value('id')
+            ?: DB::table('warehouses')->insertGetId([
+                'warehouse_code' => 'WH-PI-' . substr(uniqid(), -6),
+                'warehouse_name' => 'Product PO helper warehouse ' . substr(uniqid(), -4),
+                'branch_id'      => $branchId,
+                'is_active'      => true,
+                'created_at'     => now(),
+                'updated_at'     => now(),
+            ]);
+
         $poId = DB::table('purchase_orders')->insertGetId([
-            'po_code'    => 'PO-PI-' . substr(uniqid(), -6),
-            'po_date'    => now()->toDateString(),
+            'po_code'     => 'PO-PI-' . substr(uniqid(), -6),
+            'po_date'     => now()->toDateString(),
             'supplier_id' => $supplierId,
-            'branch_id'  => $branchId,
-            'status'     => $poStatus,
+            'branch_id'   => $branchId,
+            'warehouse_id'=> $warehouseId,
+            'status'      => $poStatus,
             'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at' => now(),
             'updated_at' => now(),

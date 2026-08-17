@@ -60,9 +60,16 @@ class WarehouseCrudTest extends TestCase
     public function test_store_creates_warehouse_and_redirects_to_show(): void
     {
         $branch = Branch::factory()->create();
+        // Use a unique warehouse_code — the seeded baseline data already
+        // uses 'WH-001' (see database/sql/basic_data_snapshot.sql), so a
+        // hardcoded 'wh-001' collides with the seeded row on the
+        // warehouse_code UNIQUE constraint and the controller rejects the
+        // POST (no warehouse created → assertDatabaseHas fails to find
+        // the expected branch_id).
+        $whCode = 'WH-T-' . substr(uniqid(), -6);
 
         $response = $this->post(route('admin.warehouses.store'), [
-            'warehouse_code' => 'wh-001',
+            'warehouse_code' => strtolower($whCode), // controller uppercases
             'warehouse_name' => '  Main Warehouse  ',
             'branch_id'      => $branch->id,
             'location'       => '  Dhaka  ',
@@ -70,7 +77,7 @@ class WarehouseCrudTest extends TestCase
 
         $response->assertRedirect();
         $this->assertDatabaseHas('warehouses', [
-            'warehouse_code' => 'WH-001', // uppercased
+            'warehouse_code' => $whCode, // uppercased
             'warehouse_name' => 'Main Warehouse', // trimmed
             'branch_id'      => $branch->id,
             'location'       => 'Dhaka',

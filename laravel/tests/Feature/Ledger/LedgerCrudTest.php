@@ -94,9 +94,20 @@ class LedgerCrudTest extends TestCase
 
     public function test_index_data_tables_endpoint_returns_created_ledger(): void
     {
-        $ledger = $this->makeLedger();
+        // Unique searchable ledger_name + search.value filter so the
+        // DataTables response narrows to JUST this ledger.
+        // LedgerController declares searchFields=['ledger_code',
+        // 'ledger_name'], so the ILIKE filter matches against both.
+        // Mirrors the fix applied to SupplierCrudTest in commit ee6341d.
+        $searchToken = 'DT LEDGER LOOKUP ' . substr(uniqid(), -6);
+        $ledger = $this->makeLedger(['ledger_name' => $searchToken]);
 
-        $response = $this->get(route('admin.ledgers.index', ['draw' => 1, 'start' => 0, 'length' => 25]));
+        $response = $this->get(route('admin.ledgers.index', [
+            'draw'   => 1,
+            'start'  => 0,
+            'length' => 25,
+            'search' => ['value' => $searchToken],
+        ]));
 
         $response->assertOk();
         $data = $response->json('data');
@@ -505,6 +516,19 @@ class LedgerCrudTest extends TestCase
 
     public function test_update_blocked_when_ledger_is_sole_active_critical_nature(): void
     {
+        // The seed data (database/sql/basic_data_snapshot.sql) ships with
+        // 2+ active cash_bank ledgers (id 16 'Cash in Hand', id 37 'Bank
+        // Accounts'). The 'sole active critical nature' safety check in
+        // LedgerController::canDeactivate() only fires when the test's
+        // ledger is the SOLE remaining active ledger for that nature.
+        // Deactivate every other active cash_bank ledger first so this
+        // test's new ledger is genuinely sole-active. Safe because
+        // DatabaseTransactions rolls back per test.
+        DB::table('ledgers')
+            ->where('ledger_nature', 'cash_bank')
+            ->where('is_active', true)
+            ->update(['is_active' => false, 'updated_at' => now()]);
+
         $ledger = $this->makeLedger(['ledger_nature' => 'cash_bank']);
 
         $response = $this->put(route('admin.ledgers.update', $ledger), [
@@ -698,6 +722,16 @@ class LedgerCrudTest extends TestCase
 
     public function test_destroy_blocked_when_ledger_is_sole_active_critical_nature(): void
     {
+        // See note in test_update_blocked_when_ledger_is_sole_active_
+        // critical_nature — the seed ships with 2+ active cash_bank
+        // ledgers; we deactivate them first so the test's new ledger is
+        // genuinely sole-active for the canDeactivate() safety check to
+        // fire. DatabaseTransactions rolls back per test.
+        DB::table('ledgers')
+            ->where('ledger_nature', 'cash_bank')
+            ->where('is_active', true)
+            ->update(['is_active' => false, 'updated_at' => now()]);
+
         $ledger = $this->makeLedger(['ledger_nature' => 'cash_bank']);
 
         $response = $this->delete(route('admin.ledgers.destroy', $ledger));
@@ -833,6 +867,15 @@ class LedgerCrudTest extends TestCase
 
     public function test_toggle_blocked_when_ledger_is_sole_active_critical_nature(): void
     {
+        // See note in test_update_blocked_when_ledger_is_sole_active_
+        // critical_nature — the seed ships with 2+ active cash_bank
+        // ledgers; we deactivate them first so the test's new ledger is
+        // genuinely sole-active. DatabaseTransactions rolls back per test.
+        DB::table('ledgers')
+            ->where('ledger_nature', 'cash_bank')
+            ->where('is_active', true)
+            ->update(['is_active' => false, 'updated_at' => now()]);
+
         $ledger = $this->makeLedger(['ledger_nature' => 'cash_bank']);
 
         $response = $this->post(route('admin.ledgers.toggle', $ledger));

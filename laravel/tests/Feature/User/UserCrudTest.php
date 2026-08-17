@@ -110,9 +110,20 @@ class UserCrudTest extends TestCase
 
     public function test_index_data_tables_endpoint_returns_created_user(): void
     {
-        $user = $this->makeUser();
+        // Unique searchable username + search.value filter so the
+        // DataTables response narrows to JUST this user. UserController
+        // declares searchFields=['username'], so the ILIKE filter
+        // matches against username only. Mirrors the fix applied to
+        // SupplierCrudTest in commit ee6341d.
+        $searchToken = 'dt_user_lookup_' . substr(uniqid(), -6);
+        $user = $this->makeUser(['username' => $searchToken]);
 
-        $response = $this->get(route('admin.users.index', ['draw' => 1, 'start' => 0, 'length' => 25]));
+        $response = $this->get(route('admin.users.index', [
+            'draw'   => 1,
+            'start'  => 0,
+            'length' => 25,
+            'search' => ['value' => $searchToken],
+        ]));
 
         $response->assertOk();
         $data = $response->json('data');

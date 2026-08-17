@@ -169,6 +169,23 @@ trait InsertsLedgerDependencies
     ): array {
         $jeId = $this->insertJournalEntry($branchId);
 
+        // CRITICAL: pull the parent journal_entry's entry_date so we can
+        // set it explicitly on every journal_lines INSERT. Without this,
+        // Postgres routes the new row to the journal_lines_default
+        // partition (no entry_date provided → NULL → default), and the
+        // BEFORE INSERT trigger trg_jl_sync_entry_date then tries to
+        // update NEW.entry_date to the parent's value — which would
+        // move the row to a different partition. Postgres forbids
+        // partition moves inside BEFORE FOR EACH ROW triggers and throws
+        // SQLSTATE[0A000]. Mirrors the issue that migration
+        // 2026_08_29_000001 (HOTFIX-9) tried to paper over for the FK-
+        // guard case; the underlying trigger still moves rows whenever
+        // the caller doesn't pre-route. Setting entry_date here makes
+        // the trigger's NEW.entry_date := parent_date a no-op.
+        $entryDate = DB::table('journal_entries')
+            ->where('id', $jeId)
+            ->value('entry_date');
+
         $this->disableJournalBalancedTrigger();
         try {
             $debitLineId = DB::table('journal_lines')->insertGetId([
@@ -179,6 +196,7 @@ trait InsertsLedgerDependencies
                 'entity_type'      => null,
                 'entity_id'        => null,
                 'memo'             => null,
+                'entry_date'       => $entryDate,
                 'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
                 'created_at'       => now(),
             ]);
@@ -190,6 +208,7 @@ trait InsertsLedgerDependencies
                 'entity_type'      => null,
                 'entity_id'        => null,
                 'memo'             => null,
+                'entry_date'       => $entryDate,
                 'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
                 'created_at'       => now(),
             ]);
