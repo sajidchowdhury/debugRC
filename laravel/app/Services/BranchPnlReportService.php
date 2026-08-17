@@ -288,14 +288,19 @@ class BranchPnlReportService
             ->get();
 
         // Per-sale-line detail (for the drilldown table).
+        //
+        // NOTE on the approver join chain:
+        //   user_audit_log.user_id  -> users.id
+        //   users.employee_id        -> employees.id   (the `name` column lives here)
+        // The `users` table itself has no `name` column, so we must join
+        // through to `employees` to resolve the approver's display name.
         $saleLines = DB::table('sales_invoice_items as sii')
             ->join('sales_invoices as si', 'si.id', '=', 'sii.sales_invoice_id')
             ->join('branch_demand_items as bdi', 'bdi.id', '=', 'sii.branch_demand_item_id')
             ->leftJoin('products as p', 'p.id', '=', 'sii.product_id')
-            ->leftJoin('users as approver', 'approver.id', '=', DB::raw(
-                "(SELECT ual.user_id FROM user_audit_log ual WHERE ual.id = sii.below_min_override_id LIMIT 1)"
-            ))
             ->leftJoin('user_audit_log as ual', 'ual.id', '=', 'sii.below_min_override_id')
+            ->leftJoin('users as approver', 'approver.id', '=', 'ual.user_id')
+            ->leftJoin('employees as approver_emp', 'approver_emp.id', '=', 'approver.employee_id')
             ->where('bdi.branch_demand_id', $demandId)
             ->where('si.is_reversed', false)
             ->orderBy('si.invoice_date', 'asc')
@@ -315,7 +320,7 @@ class BranchPnlReportService
                 'sii.cost_rate',
                 'sii.price_classification',
                 'sii.below_min_override_id',
-                'approver.name as approver_name',
+                'approver_emp.name as approver_name',
                 'ual.details as override_details',
             ])
             ->get()

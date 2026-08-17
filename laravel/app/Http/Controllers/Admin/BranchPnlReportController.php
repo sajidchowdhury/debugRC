@@ -98,20 +98,30 @@ class BranchPnlReportController extends Controller
     {
         $this->authorizeView();
 
-        $drilldown = $this->reportService->forDemand($demandId);
+        // FY access check (EARLY): if the demand's fiscal_year_id is not
+        // the running FY AND the user is not superadmin-with-explicit-
+        // override, deny. We perform this BEFORE invoking the report
+        // service so that a closed-FY demand always produces a clean
+        // 403 response, regardless of any bugs that might exist in the
+        // service's per-FY query path (defense-in-depth).
+        //
+        // Super admin still cannot view closed FYs per the Gate::before
+        // amendment in AppServiceProvider — the FiscalYearPolicy::
+        // viewHistoricalData() method hard-denies for everyone.
+        $runningFy = $this->fiscalYearService->getCurrentFiscalYear();
+        $runningFyId = $runningFy ? (int) $runningFy->id : 0;
 
-        if (!$drilldown['demand']) {
+        // Lightweight header fetch — avoid running the full per-sale-line
+        // query just to learn the demand's FY.
+        $demandHeader = DB::table('branch_demands')
+            ->where('id', $demandId)
+            ->first(['id', 'fiscal_year_id']);
+
+        if (!$demandHeader) {
             abort(404, 'Demand not found.');
         }
 
-        // FY access check: if the demand's fiscal_year_id is not the
-        // running FY AND the user is not superadmin-with-explicit-override,
-        // deny. (Super admin still cannot view closed FYs per the
-        // Gate::before() amendment in AppServiceProvider — the
-        // FiscalYearPolicy::viewHistoricalData() hard-denies for everyone.)
-        $runningFy = $this->fiscalYearService->getCurrentFiscalYear();
-        $runningFyId = $runningFy ? (int) $runningFy->id : 0;
-        $demandFyId = (int) $drilldown['demand']->fiscal_year_id;
+        $demandFyId = (int) $demandHeader->fiscal_year_id;
         if ($demandFyId !== $runningFyId && $demandFyId > 0) {
             // Load via Eloquent (App\Models\FiscalYear), NOT via
             // DB::table('fiscal_years'). The FiscalYearPolicy::
@@ -140,6 +150,12 @@ class BranchPnlReportController extends Controller
                     abort(403, 'This demand belongs to a closed fiscal year and cannot be viewed.');
                 }
             }
+        }
+
+        $drilldown = $this->reportService->forDemand($demandId);
+
+        if (!$drilldown['demand']) {
+            abort(404, 'Demand not found.');
         }
 
         return view('admin.branch-demands.pnl', [
