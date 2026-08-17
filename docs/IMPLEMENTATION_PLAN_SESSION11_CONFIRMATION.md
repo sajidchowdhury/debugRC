@@ -2,7 +2,21 @@
 
 **Phase 2 / Q2 — Final Hardening (S10.2 in some logs, but called S11 here)**
 **Status:** Code complete, pushed to both branches
-**Branches:** `main` (cherry-picked from `feature/fy-isolation-and-branch-pnl` commit `46dc0e4`)
+**Branches:** `main` (cherry-picked from `feature/fy-isolation-and-branch-pnl` commits `e2e8630` + `0803358` + `dfd6cdf`)
+
+> **Update (S11.1 — second pass):** The first-pass S11 reduced failures
+> from 14 → 5 (32 → 41 passed). The remaining 5 failures fell into 2
+> clusters: (a) the `sales_invoice_items` insert in
+> `DemandItemFifoResolverTest::insertSalesInvoiceItem()` was missing
+> the `fiscal_year_id` column too (S1 added NOT NULL `fiscal_year_id`
+> to BOTH `sales_invoices` AND `sales_invoice_items` — I only fixed
+> the parent in the first pass); (b) the `BranchPnlReportController::
+> showForDemand()` 500-for-super-admin persisted because relying solely
+> on `Gate::denies('viewHistoricalData', $fy)` for the abort(403)
+> decision proved unreliable in this scenario. Both fixed in commit
+> `fcbbde5` (feature) / `dfd6cdf` (main). See the "S11.1 second-pass
+> fixes" section at the bottom of this doc for details. Expected final
+> state: 46 passed / 0 failed.
 
 ## Context
 
@@ -296,3 +310,119 @@ the implementation plan's signoff matrix.
 
 No further sessions are planned unless the manual UAT surfaces new
 issues.
+
+---
+
+## S11.1 Second-Pass Fixes (commit `fcbbde5` / `dfd6cdf`)
+
+The dev team pulled S11 and re-ran the suite: **41 passed / 5 failed**
+(down from 14). Two clusters remained:
+
+### Cluster B (second pass) — `sales_invoice_items.fiscal_year_id` NOT NULL (4 failures)
+
+**Affected tests:** 4 release-related tests in `DemandItemFifoResolverTest`
+(same as the first-pass Cluster B, but with a new error message).
+
+**Error:**
+```
+SQLSTATE[23502]: Not null violation: 7 ERROR:  null value in column
+"fiscal_year_id" of relation "sales_invoice_items" violates
+not-null constraint
+```
+
+**Cause:** S1 migration `2026_10_16_000002_backfill_fiscal_year_id.php`
+added NOT NULL `fiscal_year_id` to BOTH `sales_invoices` AND
+`sales_invoice_items` (see `config/fiscal.php` lines 40 + 45 — the
+latter is configured with `parent => ['sales_invoices', 'sales_invoice_id',
+'invoice_date']`, indicating it inherits FY from the parent invoice).
+
+The first-pass S11 fix added `fiscal_year_id` to the `sales_invoices`
+insert but missed the `sales_invoice_items` insert in the same
+`insertSalesInvoiceItem()` helper.
+
+**Fix:** Add `'fiscal_year_id' => $this->resolveActiveFiscalYearId()` to
+the `sales_invoice_items` insert. The helper is idempotent — the second
+call to `resolveActiveFiscalYearId()` returns the SAME FY id (the first
+call's auto-created FY is now in the table), so the parent and child
+rows are FY-consistent.
+
+**Production impact:** None. Test-only fix.
+
+### Cluster D (second pass) — `showForDemand` returns 500 not 403 for super admin (1 failure)
+
+**Affected test:** `test_show_for_demand_returns_403_for_closed_fy_demand_
+even_for_super_admin` (same test, same error message).
+
+**Cause:** The first-pass S11 fix switched to Eloquent
+(`FiscalYear::withoutGlobalScopes()->find($id)`) but kept the
+`Gate::denies('viewHistoricalData', $fy)` as the sole abort(403)
+trigger. For super admin + closed FY, the Gate path was still
+producing a 500 instead of the expected 403.
+
+The exact mechanism wasn't reproduced locally (no Docker), but the
+likely culprit is a Laravel 12 Gate resolution quirk for
+`Gate::before` returning `false` on a model with `SoftDeletes` +
+`BranchScope` — the policy's `viewHistoricalData(User, FiscalYear)`
+method's type-hint may have been evaluated even when `Gate::before`
+short-circuited.
+
+**Fix:** Restructure the FY check into a two-tier defense-in-depth:
+
+```php
+$fy = \App\Models\FiscalYear::withoutGlobalScopes()->find($demandFyId);
+if ($fy) {
+    // PRIMARY CHECK: a non-active FY is historical → block directly.
+    // Fires BEFORE the Gate call, so Gate quirks don't affect the
+    // closed-FY path.
+    if ($fy->status !== 'active') {
+        abort(403, '...');
+    }
+    // SECONDARY CHECK: even if status is 'active' but the FY is not
+    // the running one, the policy's viewHistoricalData() hard-denies
+    // for everyone (including super admin, via Gate::before amendment).
+    if (Gate::denies('viewHistoricalData', $fy)) {
+        abort(403, '...');
+    }
+}
+```
+
+The status check is the **primary** path for the closed-FY scenario
+(the test's actual case). The Gate call remains as a **secondary**
+defense-in-depth check for the edge case where an active FY is not
+the running one (e.g., a misconfigured FY with `is_current=false`
+but `status=active`).
+
+**Production impact:** YES — this completes the fix for the same
+production bug flagged in the first-pass Cluster D. The closed-FY
+drilldown now reliably returns 403 for everyone, including super
+admin, regardless of Gate semantics.
+
+### Files Touched (second pass)
+
+| File | Change | Cluster | Lines |
+|------|--------|---------|-------|
+| `tests/Unit/Services/Pricing/DemandItemFifoResolverTest.php` | Add `fiscal_year_id` to `sales_invoice_items` insert | B | +5 −0 |
+| `app/Http/Controllers/Admin/BranchPnlReportController.php` | Status-check primary, Gate-check secondary | D | +9 −2 |
+| **Total** | | | **+14 −2** |
+
+### Acceptance Tests (second pass)
+
+```bash
+git pull origin main
+docker compose exec rcerp_app php artisan test \
+    tests/Unit/FiscalYear tests/Unit/Services/Pricing tests/Feature/BranchPnl
+```
+
+**Expected:** All 46 tests pass (0 failures).
+
+### Lesson Learned (second pass)
+
+When an S1 migration adds NOT NULL columns to a parent-child pair
+(e.g., `sales_invoices` + `sales_invoice_items`), the test helpers
+must update BOTH inserts — not just the parent. The
+`config/fiscal.php` `parent` key (line 48) is the hint: a child
+table that inherits `fiscal_year_id` from a parent still has the
+NOT NULL column on its own row, and the FK inheritance is enforced
+at insert time, not at read time. Always grep `config/fiscal.php`
+for both the table name and any `parent` references before
+assuming a single-table fix is enough.
