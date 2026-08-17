@@ -37,26 +37,35 @@ trait InsertsBranchDependencies
      * Returns the invoice id.
      *
      * Schema: invoice_code (UK), invoice_date, customer_id (FK), branch_id (FK),
-     *        status CHECK IN (draft,confirmed,cancelled,reversed), is_reversed bool
+     *        status CHECK IN (draft,confirmed,cancelled,reversed), is_reversed bool,
+     *        fiscal_year_id NOT NULL (added in S1 FY-isolation; see config/fiscal.php).
+     *
+     * Session 1 (FY isolation) added a NOT NULL `fiscal_year_id` column
+     * to `sales_invoices`. If `$fiscalYearId` is not provided, the helper
+     * auto-resolves to the current running FY (mirroring insertBranchDemand).
      */
     protected function insertSalesInvoice(
         int $branchId,
         string $status = 'confirmed',
         bool $isReversed = false,
         ?string $invoiceCode = null,
+        ?int $fiscalYearId = null,
     ): int {
         // Ensure a customer exists for this branch (FK constraint).
         $customerId = $this->insertCustomer($branchId);
 
+        $fiscalYearId ??= $this->resolveActiveFiscalYearId();
+
         return DB::table('sales_invoices')->insertGetId([
-            'invoice_code' => $invoiceCode ?? 'INV-' . uniqid(),
-            'invoice_date' => now()->toDateString(),
-            'customer_id'  => $customerId,
-            'branch_id'    => $branchId,
-            'status'       => $status,
-            'is_reversed'  => $isReversed,
-            'created_at'   => now(),
-            'updated_at'   => now(),
+            'invoice_code'   => $invoiceCode ?? 'INV-' . uniqid(),
+            'invoice_date'   => now()->toDateString(),
+            'customer_id'    => $customerId,
+            'branch_id'      => $branchId,
+            'status'         => $status,
+            'is_reversed'    => $isReversed,
+            'fiscal_year_id' => $fiscalYearId,
+            'created_at'     => now(),
+            'updated_at'     => now(),
         ]);
     }
 

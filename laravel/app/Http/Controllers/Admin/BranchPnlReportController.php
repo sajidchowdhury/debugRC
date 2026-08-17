@@ -112,12 +112,21 @@ class BranchPnlReportController extends Controller
         $runningFy = $this->fiscalYearService->getCurrentFiscalYear();
         $runningFyId = $runningFy ? (int) $runningFy->id : 0;
         $demandFyId = (int) $drilldown['demand']->fiscal_year_id;
-        if ($demandFyId !== $runningFyId) {
+        if ($demandFyId !== $runningFyId && $demandFyId > 0) {
             // Verify via the Gate (FiscalYearPolicy). This calls
             // FiscalYearPolicy::viewHistoricalData() which hard-denies
             // for everyone (including super admin, via the Gate::before
             // amendment in AppServiceProvider).
-            $fy = DB::table('fiscal_years')->where('id', $demandFyId)->first();
+            //
+            // IMPORTANT: load via Eloquent (App\Models\FiscalYear), NOT via
+            // DB::table('fiscal_years'). The policy's viewHistoricalData()
+            // method type-hints `FiscalYear $fy` — passing a stdClass (which
+            // DB::table returns) breaks policy resolution and can yield a
+            // 500 instead of the intended 403. We also bypass global scopes
+            // (BranchScope) here because the demand's FY might belong to a
+            // different branch than the authenticated user's; the policy is
+            // the authority, not the scope.
+            $fy = \App\Models\FiscalYear::withoutGlobalScopes()->find($demandFyId);
             if ($fy) {
                 if (\Illuminate\Support\Facades\Gate::denies('viewHistoricalData', $fy)) {
                     abort(403, 'This demand belongs to a closed fiscal year and cannot be viewed.');

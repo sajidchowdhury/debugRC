@@ -72,6 +72,10 @@ class BelowMinApprovalServiceTest extends TestCase
         ]);
 
         // Insert a product_price_history row effective today.
+        // NOTE: the legacy `product_price_history` table (database/sql/01_auth_and_master.sql:184-195)
+        // has ONLY `created_at` — NO `updated_at` column. Inserting `updated_at`
+        // triggers SQLSTATE[42703]: Undefined column: 7 ERROR: column "updated_at"
+        // of relation "product_price_history" does not exist.
         DB::table('product_price_history')->insert([
             'product_id'    => $productId,
             'min_rate'      => $minRate,
@@ -80,7 +84,6 @@ class BelowMinApprovalServiceTest extends TestCase
             'effective_from'=> now()->toDateString(),
             'effective_to'  => null,
             'created_at'    => now(),
-            'updated_at'    => now(),
         ]);
 
         return $productId;

@@ -133,16 +133,22 @@ class DemandItemFifoResolverTest extends TestCase
 
         // sales_invoice_items requires a sales_invoice_id (trigger-enforced
         // FK). Insert a minimal sales_invoices row first.
+        //
+        // S1 (FY isolation) added NOT NULL `fiscal_year_id` to sales_invoices
+        // (config/fiscal.php line 40). The insert MUST set it; otherwise
+        // SQLSTATE[23502]: null value in column "fiscal_year_id" of relation
+        // "sales_invoices_default" violates not-null constraint.
         $siId = DB::table('sales_invoices')->insertGetId([
-            'invoice_code'  => 'INV-' . substr(uniqid(), -8),
-            'invoice_date'  => now()->toDateString(),
-            'customer_id'   => $customerId,
-            'branch_id'     => $branch->id,
-            'total_amount'  => $qty * 10,
-            'status'        => 'confirmed',  // CHECK IN ('draft','confirmed','cancelled','reversed')
-            'is_reversed'   => false,
-            'created_at'    => now(),
-            'updated_at'    => now(),
+            'invoice_code'    => 'INV-' . substr(uniqid(), -8),
+            'invoice_date'    => now()->toDateString(),
+            'customer_id'     => $customerId,
+            'branch_id'       => $branch->id,
+            'total_amount'    => $qty * 10,
+            'status'          => 'confirmed',  // CHECK IN ('draft','confirmed','cancelled','reversed')
+            'is_reversed'     => false,
+            'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
+            'created_at'      => now(),
+            'updated_at'      => now(),
         ]);
 
         return DB::table('sales_invoice_items')->insertGetId([
@@ -232,7 +238,7 @@ class DemandItemFifoResolverTest extends TestCase
         $productId = $this->insertProduct();
 
         // Total open qty = 5, but we ask for 10.
-        $this->insertReceivedDemandWithItem(
+        $itemId = $this->insertReceivedDemandWithItem(
             fromBranchId: $branchB->id, toBranchId: $branchA->id,
             productId: $productId, qty: 5.0, costRate: 10.0,
         );
@@ -242,7 +248,15 @@ class DemandItemFifoResolverTest extends TestCase
         $this->assertSame([], $result, 'Insufficient open qty must return [] (no over-consumption).');
 
         // Verify consumed_qty was NOT bumped (rollback inside the transaction).
-        $consumed = DB::table('branch_demand_items')->value('consumed_qty');
+        //
+        // NOTE: must scope to the actual demand item id — an unscoped
+        // DB::table('branch_demand_items')->value('consumed_qty') picks an
+        // arbitrary row (the table may have stale rows from prior tests if
+        // DatabaseTransactions trait is misconfigured or the table has
+        // seed data).
+        $consumed = DB::table('branch_demand_items')
+            ->where('id', $itemId)
+            ->value('consumed_qty');
         $this->assertEquals(0.0, (float) $consumed, 'consumed_qty must not change when allocation fails.');
     }
 
