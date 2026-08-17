@@ -66,7 +66,14 @@ class WarehouseCrudTest extends TestCase
         // warehouse_code UNIQUE constraint and the controller rejects the
         // POST (no warehouse created → assertDatabaseHas fails to find
         // the expected branch_id).
-        $whCode = 'WH-T-' . substr(uniqid(), -6);
+        //
+        // Build the code in ALL UPPERCASE upfront. uniqid() returns
+        // lowercase hex, so 'WH-T-' . substr(uniqid(), -6) would be MIXED
+        // CASE ('WH-T-aaf7b5'); the controller strtoupper()s the stored
+        // value to 'WH-T-AAF7B5', and the assert below uses $whCode
+        // directly — so $whCode MUST already be uppercase for the
+        // case-sensitive PostgreSQL = comparison to match.
+        $whCode = 'WH-T-' . strtoupper(substr(uniqid(), -6));
 
         $response = $this->post(route('admin.warehouses.store'), [
             'warehouse_code' => strtolower($whCode), // controller uppercases

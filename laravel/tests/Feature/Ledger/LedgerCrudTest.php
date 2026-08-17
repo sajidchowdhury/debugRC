@@ -3,6 +3,7 @@
 namespace Tests\Feature\Ledger;
 
 use App\Models\Ledger;
+use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\InsertsLedgerDependencies;
 use Tests\TestCase;
