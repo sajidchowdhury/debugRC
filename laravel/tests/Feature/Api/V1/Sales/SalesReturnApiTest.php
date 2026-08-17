@@ -250,6 +250,7 @@ class SalesReturnApiTest extends TestCase
             'cogs_amount'       => 0,
             'status'            => $status,
             'is_reversed'       => false,
+            'fiscal_year_id'    => $this->resolveActiveFiscalYearId(),
             'created_at'        => now(),
             'updated_at'        => now(),
         ]);

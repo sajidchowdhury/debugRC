@@ -379,6 +379,7 @@ class AbcClassificationServiceTest extends TestCase
                 'reference_type'   => 'stock_adjustment',
                 'reference_id'     => 1, // dummy; FK is trigger-enforced, not declarative
                 'is_reversed'      => false,
+                'fiscal_year_id'   => $this->resolveActiveFiscalYearId(),
                 'created_at'       => now(),
             ]);
         }

@@ -25,6 +25,7 @@ use Illuminate\Support\Facades\DB;
  */
 trait InsertsBankDependencies
 {
+    use ResolvesActiveFiscalYear;
     /**
      * Insert a ledgers row of nature `cash_bank` and return its id.
      *
@@ -103,6 +104,7 @@ trait InsertsBankDependencies
             'payment_mode' => 'bank',
             'amount'       => $amount,
             'is_reversed'  => $isReversed,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'   => now(),
             'updated_at'   => now(),
         ]);
@@ -135,6 +137,7 @@ trait InsertsBankDependencies
             'payment_mode' => 'bank',
             'amount'       => $amount,
             'is_reversed'  => $isReversed,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'   => now(),
             'updated_at'   => now(),
         ]);

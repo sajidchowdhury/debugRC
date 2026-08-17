@@ -157,6 +157,7 @@ class BranchIntercompanyServiceTest extends TestCase
             'payment_mode' => 'bank',
             'payment_date' => now()->toDateString(),
             'is_reversed' => false,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at' => now(),
             'updated_at' => now(),
         ]);

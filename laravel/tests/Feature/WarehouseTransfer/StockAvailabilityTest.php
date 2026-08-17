@@ -97,6 +97,7 @@ class StockAvailabilityTest extends TestCase
             'branch_id'    => $branchId,
             'status'       => 'confirmed',
             'is_reversed'  => false,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'   => now(),
             'updated_at'   => now(),
         ]);

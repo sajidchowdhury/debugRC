@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\DB;
  */
 trait InsertsProductDependencies
 {
+    use ResolvesActiveFiscalYear;
     /**
      * Insert a product_categories row with the minimum required columns.
      * Returns the category id.
@@ -94,6 +95,7 @@ trait InsertsProductDependencies
             'branch_id'    => $branchId,
             'status'       => $invoiceStatus,
             'is_reversed'  => false,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'   => now(),
             'updated_at'   => now(),
         ]);
@@ -104,6 +106,7 @@ trait InsertsProductDependencies
             'qty'              => 1,
             'rate'             => 10.00,
             'condition_state'  => 'Good',
+            'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
         ]);
     }
 
@@ -130,6 +133,7 @@ trait InsertsProductDependencies
             'supplier_id' => $supplierId,
             'branch_id'  => $branchId,
             'status'     => $poStatus,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at' => now(),
             'updated_at' => now(),
         ]);
@@ -140,6 +144,7 @@ trait InsertsProductDependencies
             'qty'               => 1,
             'received_qty'      => 0,
             'rate'              => 10.00,
+            'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
         ]);
     }
 }

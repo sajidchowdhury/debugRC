@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\DB;
  */
 trait InsertsSupplierDependencies
 {
+    use ResolvesActiveFiscalYear;
     /**
      * Insert a supplier row with the minimum required columns.
      * Returns the supplier id.
@@ -64,6 +65,7 @@ trait InsertsSupplierDependencies
             'reference_type'   => $type === 'debit' ? 'payment' : 'invoice',
             'reference_id'     => 0,
             'description'      => 'Phase 11 test ledger entry',
+            'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
             'created_at'       => now(),
         ];
 
@@ -97,6 +99,7 @@ trait InsertsSupplierDependencies
             'supplier_id' => $supplierId,
             'branch_id'   => $branchId,
             'status'      => $status,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'  => now(),
             'updated_at'  => now(),
         ]);
@@ -128,6 +131,7 @@ trait InsertsSupplierDependencies
             'branch_id'    => $branchId,
             'warehouse_id' => $warehouseId ?? 1,
             'is_reversed'  => $isReversed,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'   => now(),
             'updated_at'   => now(),
         ]);

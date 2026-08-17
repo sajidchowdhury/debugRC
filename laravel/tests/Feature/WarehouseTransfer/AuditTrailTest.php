@@ -202,6 +202,7 @@ class AuditTrailTest extends TestCase
             'is_interbranch'  => true,
             'status'          => 'confirmed',
             'is_reversed'     => false,
+            'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
             'created_by'      => auth()->id(),
             'created_at'      => now(),
             'updated_at'      => now(),
@@ -212,6 +213,7 @@ class AuditTrailTest extends TestCase
             'product_id'            => $productId,
             'qty'                   => 10,
             'rate'                  => 10,
+            'fiscal_year_id'        => $this->resolveActiveFiscalYearId(),
         ]);
 
         // Run health checks (no branch filter = check all).

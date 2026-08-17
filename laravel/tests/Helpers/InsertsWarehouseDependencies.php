@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\DB;
  */
 trait InsertsWarehouseDependencies
 {
+    use ResolvesActiveFiscalYear;
     /**
      * Insert a product row with minimum required columns.
      * Note: `unit` must be one of: Pcs, Carton, KG, Bag, Dobe, Set (CHECK constraint).
@@ -72,6 +73,7 @@ trait InsertsWarehouseDependencies
             'branch_id'    => $branchId,
             'status'       => 'confirmed',
             'is_reversed'  => false,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'   => now(),
             'updated_at'   => now(),
         ]);
@@ -104,12 +106,15 @@ trait InsertsWarehouseDependencies
      */
     protected function insertActiveStockTake(int $warehouseId, int $branchId, string $status = 'draft'): int
     {
+        $fyId = $this->resolveActiveFiscalYearId();
+
         $sessionId = DB::table('stock_take_sessions')->insertGetId([
             'session_code'  => 'ST-' . substr(uniqid(), -6),
             'session_date'  => now()->toDateString(),
             'branch_id'     => $branchId,
             'status'        => $status,
             'is_reversed'   => false,
+            'fiscal_year_id' => $fyId,
             'created_at'    => now(),
             'updated_at'    => now(),
         ]);
@@ -117,6 +122,7 @@ trait InsertsWarehouseDependencies
         DB::table('stock_take_warehouses')->insert([
             'stock_take_session_id' => $sessionId,
             'warehouse_id'          => $warehouseId,
+            'fiscal_year_id'        => $fyId,
         ]);
 
         return $sessionId;

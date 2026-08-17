@@ -25,6 +25,7 @@ use Illuminate\Support\Facades\DB;
  */
 trait InsertsEmployeeDependencies
 {
+    use ResolvesActiveFiscalYear;
     /**
      * Insert an employee_ledger row simulating a salary advance / repayment.
      *
@@ -117,6 +118,7 @@ trait InsertsEmployeeDependencies
             'transaction_type' => $transactionType,
             'amount'           => $amount,
             'is_reversed'      => $isReversed,
+            'fiscal_year_id'   => $this->resolveActiveFiscalYearId(),
             'created_at'       => now(),
             'updated_at'       => now(),
         ]);

@@ -342,6 +342,7 @@ class ConcurrentCountTest extends TestCase
             'freeze_outbound' => true,
             'frozen_at'     => now(),
             'count_scope'   => 'full',
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'    => now(),
             'updated_at'    => now(),
         ]);
@@ -351,6 +352,7 @@ class ConcurrentCountTest extends TestCase
             'branch_id'             => $branch->id,
             'freeze_outbound'       => true,
             'status'                => 'pending',
+            'fiscal_year_id'        => $this->resolveActiveFiscalYearId(),
         ]);
 
         // Insert session B (draft). Then attempt to insert stw B with freeze=true
@@ -364,6 +366,7 @@ class ConcurrentCountTest extends TestCase
             'freeze_outbound' => true,
             'frozen_at'     => now(),
             'count_scope'   => 'full',
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'    => now(),
             'updated_at'    => now(),
         ]);
@@ -375,6 +378,7 @@ class ConcurrentCountTest extends TestCase
                 'branch_id'             => $branch->id,
                 'freeze_outbound'       => true,
                 'status'                => 'pending',
+                'fiscal_year_id'        => $this->resolveActiveFiscalYearId(),
             ]);
             $this->fail('Expected a QueryException with SQLSTATE 23000 from the prevent_overlapping_frozen_stock_take trigger.');
         } catch (QueryException $e) {
