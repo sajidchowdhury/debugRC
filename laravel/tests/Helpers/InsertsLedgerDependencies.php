@@ -28,6 +28,7 @@ use Illuminate\Support\Facades\DB;
  */
 trait InsertsLedgerDependencies
 {
+    use ResolvesActiveFiscalYear;
     /**
      * Insert a ledgers row directly via DB::table (bypasses Eloquent
      * timestamps + factory). Returns the ledger id.
@@ -87,6 +88,7 @@ trait InsertsLedgerDependencies
             'description'     => 'Test journal entry ' . $entryNo,
             'source'          => 'manual',
             'is_reversed'     => false,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'      => now(),
             'updated_at'      => now(),
         ], $overrides));
@@ -139,6 +141,7 @@ trait InsertsLedgerDependencies
                 'entity_type'      => null,
                 'entity_id'        => null,
                 'memo'             => null,
+                'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
                 'created_at'       => now(),
             ], $overrides));
         } finally {
@@ -176,6 +179,7 @@ trait InsertsLedgerDependencies
                 'entity_type'      => null,
                 'entity_id'        => null,
                 'memo'             => null,
+                'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
                 'created_at'       => now(),
             ]);
             $creditLineId = DB::table('journal_lines')->insertGetId([
@@ -186,6 +190,7 @@ trait InsertsLedgerDependencies
                 'entity_type'      => null,
                 'entity_id'        => null,
                 'memo'             => null,
+                'fiscal_year_id'  => $this->resolveActiveFiscalYearId(),
                 'created_at'       => now(),
             ]);
         } finally {

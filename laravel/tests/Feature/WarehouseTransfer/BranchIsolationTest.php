@@ -71,6 +71,7 @@ class BranchIsolationTest extends TestCase
             'status'           => $status,
             'is_reversed'      => false,
             'notes'            => 'Branch isolation test',
+            'fiscal_year_id'   => $this->resolveActiveFiscalYearId(),
             'created_by'       => auth()->id(),
             'created_at'       => now(),
             'updated_at'       => now(),

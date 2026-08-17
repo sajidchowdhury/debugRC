@@ -348,6 +348,7 @@ class StockTakeServiceTest extends TestCase
             'status'        => 'counting',
             'is_reversed'   => false,
             'count_scope'   => 'full',
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'    => now(),
             'updated_at'    => now(),
         ]);
@@ -403,6 +404,7 @@ class StockTakeServiceTest extends TestCase
                 // (not is_reversed), so the value here is informational.
                 'is_reversed'   => $status === 'reversed',
                 'count_scope'   => 'full',
+                'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
                 'created_at'    => now(),
                 'updated_at'    => now(),
             ]);

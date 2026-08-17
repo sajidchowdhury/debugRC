@@ -2,7 +2,9 @@
 
 namespace Database\Factories;
 
+use App\Models\FiscalYear;
 use Illuminate\Database\Eloquent\Factories\Factory;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Sales Invoice factory — Phase 10/16 testing (LOW-WAVE-2-B2 G-294).
@@ -23,6 +25,13 @@ use Illuminate\Database\Eloquent\Factories\Factory;
  *   - `created_by` defaults to null — callers override with the
  *     authenticated user's id when the dashboard's per-user attribution
  *     needs to be exercised.
+ *   - `fiscal_year_id` is resolved via `resolveActiveFiscalYearIdForFactory()`
+ *     (mirrors the test-helper resolution chain: running FY → any active →
+ *     create minimal active FY). This is required because the Session 1
+ *     FY-isolation migration made `fiscal_year_id` NOT NULL on
+ *     `sales_invoices` (config/fiscal.php, backfill migration
+ *     2026_10_16_000002). Callers that need to pin a specific FY can
+ *     override via `->state(['fiscal_year_id' => $fyId])`.
  *   - Uses uniqid() for invoice_code uniqueness across PHP process
  *     restarts (the table has a UNIQUE constraint on
  *     (invoice_code, invoice_date)).
@@ -43,6 +52,7 @@ class SalesInvoiceFactory extends Factory
             'salesman_id'         => null,
             'sales_person'        => null,
             'branch_id'           => null, // must be set by caller
+            'fiscal_year_id'      => $this->resolveActiveFiscalYearIdForFactory(),
             'sub_total'           => 100,
             'discount_amount'     => 0,
             'transport_cost'      => 0,
@@ -58,6 +68,61 @@ class SalesInvoiceFactory extends Factory
             'call_a_day'          => false,
             'created_by'          => null,
         ];
+    }
+
+    /**
+     * Resolve an active fiscal year id for factory-created rows.
+     *
+     * Mirrors the test-helper resolution chain in
+     * Tests\Helpers\ResolvesActiveFiscalYear but lives inline here
+     * because factory classes can't `use` test traits.
+     *
+     * Resolution order:
+     *   1. Existing FY with is_current=true AND status=active.
+     *   2. Any FY with status=active.
+     *   3. Last resort: create a minimal active FY covering the current
+     *      calendar year (reuses the system user id, mirrors seed
+     *      migration 2026_08_10_000004 pattern).
+     *
+     * Uses DB::table (bypasses BranchScope) — factories don't have an
+     * auth context to rely on.
+     */
+    private function resolveActiveFiscalYearIdForFactory(): int
+    {
+        $existing = DB::table('fiscal_years')
+            ->where('is_current', true)
+            ->where('status', 'active')
+            ->value('id');
+
+        if ($existing) {
+            return (int) $existing;
+        }
+
+        $anyActive = DB::table('fiscal_years')
+            ->where('status', 'active')
+            ->value('id');
+
+        if ($anyActive) {
+            return (int) $anyActive;
+        }
+
+        $sysUserId = DB::table('users')->value('id') ?? 1;
+        $year = now()->year;
+
+        return (int) DB::table('fiscal_years')->insertGetId([
+            'name'             => "Test FY {$year}-{$year}",
+            'fiscal_year_code' => 'TFY-' . substr(uniqid(), -6),
+            'start_date'       => "{$year}-01-01",
+            'end_date'         => "{$year}-12-31",
+            'branch_id'        => null,
+            'period_type'      => 'monthly',
+            'status'           => 'active',
+            'is_current'       => true,
+            'description'      => 'Auto-created by SalesInvoiceFactory',
+            'created_by'       => $sysUserId,
+            'created_at'       => now(),
+            'updated_at'       => now(),
+        ]);
     }
 
     /**

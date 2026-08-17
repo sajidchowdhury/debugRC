@@ -23,6 +23,7 @@ use Illuminate\Support\Facades\DB;
  */
 trait InsertsCustomerDependencies
 {
+    use ResolvesActiveFiscalYear;
     /**
      * Insert a customer row with the minimum required columns.
      * Returns the customer id.
@@ -65,6 +66,7 @@ trait InsertsCustomerDependencies
             'reference_type'   => $type === 'credit' ? 'payment' : 'invoice',
             'reference_id'     => 0,
             'description'      => 'Phase 10 test ledger entry',
+            'fiscal_year_id'   => $this->resolveActiveFiscalYearId(),
             'created_at'       => now(),
         ];
 
@@ -102,6 +104,7 @@ trait InsertsCustomerDependencies
             'branch_id'    => $branchId,
             'status'       => $status,
             'is_reversed'  => $isReversed,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'   => now(),
             'updated_at'   => now(),
         ]);
@@ -131,6 +134,7 @@ trait InsertsCustomerDependencies
             'payment_mode' => $paymentMode,
             'amount'       => $amount,
             'is_reversed'  => false,
+            'fiscal_year_id' => $this->resolveActiveFiscalYearId(),
             'created_at'   => now(),
             'updated_at'   => now(),
         ]);

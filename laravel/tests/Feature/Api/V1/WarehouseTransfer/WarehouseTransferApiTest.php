@@ -314,6 +314,10 @@ class WarehouseTransferApiTest extends TestCase
             'is_interbranch'     => false,
             'status'             => 'draft',
             'is_reversed'        => false,
+            // S12: warehouse_transfers is a fiscal-scoped table
+            // (config/fiscal.php: date_column=transfer_date, partitioned=true)
+            // — NOT NULL after S1 FY-isolation.
+            'fiscal_year_id'     => $this->resolveActiveFiscalYearId(),
             'created_at'         => now(),
             'updated_at'         => now(),
         ]);

@@ -12,6 +12,7 @@ use App\Models\Warehouse;
 use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\IssuesApiTokens;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -27,6 +28,7 @@ use Tests\TestCase;
 class DashboardApiTest extends TestCase
 {
     use BuildsRoleUsers, IssuesApiTokens;
+    use ResolvesActiveFiscalYear;
 
     // ====================================================================
     // AUTH
@@ -244,6 +246,11 @@ class DashboardApiTest extends TestCase
             'qty'              => 4,
             'rate'             => 50,
             'condition_state'  => 'Good',
+            // S12: sales_invoice_items is a fiscal-scoped child table
+            // (config/fiscal.php: parent=['sales_invoices', 'sales_invoice_id',
+            // 'invoice_date']) — NOT NULL after S1 FY-isolation. Parent
+            // sales_invoices row already carries FY via SalesInvoiceFactory.
+            'fiscal_year_id'   => $this->resolveActiveFiscalYearId(),
         ]);
 
         $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])

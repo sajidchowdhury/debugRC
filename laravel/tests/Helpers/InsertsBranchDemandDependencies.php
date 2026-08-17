@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\DB;
  */
 trait InsertsBranchDemandDependencies
 {
+    use ResolvesActiveFiscalYear;
     /**
      * Insert a branch_demand_items row with the minimum required columns.
      * Returns the item id.
@@ -84,6 +85,7 @@ trait InsertsBranchDemandDependencies
             'running_balance'  => $amount,
             'journal_entry_id' => $journalEntryId,
             'is_reversed'      => $isReversed,
+            'fiscal_year_id'   => $this->resolveActiveFiscalYearId(),
             'created_at'       => now(),
         ], $overrides));
     }
@@ -110,6 +112,7 @@ trait InsertsBranchDemandDependencies
             'approved_by'         => $approvedBy,
             'journal_entry_id'    => $journalEntryId,
             'created_by'          => $createdBy,
+            'fiscal_year_id'     => $this->resolveActiveFiscalYearId(),
             'created_at'          => now(),
         ], $overrides));
     }
