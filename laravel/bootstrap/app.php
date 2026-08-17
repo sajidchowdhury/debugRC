@@ -162,6 +162,22 @@ return Application::configure(basePath: dirname(__DIR__))
                 return null;
             }
 
+            // AuthenticationException / AuthorizationException /
+            // ModelNotFoundException / HttpException — Laravel's default
+            // handler already maps these to the correct JSON status
+            // (401 / 403 / 404 / <httpCode>). The catch-all below would
+            // force them all to 500 because they don't implement
+            // getStatusCode() (except HttpException). Defer to Laravel's
+            // default rendering so e.g. an unauthenticated DELETE
+            // correctly returns 401 instead of 500.
+            if ($e instanceof \Illuminate\Auth\AuthenticationException
+                || $e instanceof \Illuminate\Auth\Access\AuthorizationException
+                || $e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException
+                || $e instanceof \Symfony\Component\HttpKernel\Exception\HttpException
+            ) {
+                return null;
+            }
+
             $debug    = (bool) config('app.debug');
             $status   = method_exists($e, 'getStatusCode') ? $e->getStatusCode() : 500;
             $payload  = [

@@ -81,25 +81,38 @@ class SupplierCrudTest extends TestCase
 
     public function test_index_data_tables_endpoint_returns_branch_name(): void
     {
-        // RLS policy on suppliers (database/sql/07 line 527) reads
-        // `current_setting('app.branch_id')` which SetAppBranchId sets
-        // from session('branch_id') ?? Auth::user()->getBranchId().
-        // If we create the supplier in a fresh Branch, RLS hides it
-        // from the DataTables response because the admin's GUC points
-        // at the admin's own branch. Reuse the admin's branch_id so
-        // the just-created supplier is visible through RLS.
+        // Use a unique searchable supplier_name + search.value filter so
+        // the DataTables response narrows to JUST this supplier,
+        // regardless of how much seeded baseline data already exists
+        // in the test DB (the table has 1000+ seeded suppliers, and
+        // length=25 only returns the first page — without a search
+        // filter, our just-created supplier may be on a later page).
+        //
+        // Also re-use the authenticated admin's branch_id so RLS
+        // (database/sql/07 line 527, app.branch_id GUC set by
+        // SetAppBranchId from Auth::user()->getBranchId()) lets the
+        // row through.
         $adminBranchId = \Illuminate\Support\Facades\Auth::user()?->getBranchId();
         $branch = $adminBranchId
             ? Branch::findOrFail($adminBranchId)
             : Branch::factory()->create();
 
-        $supplier = Supplier::factory()->forBranch($branch->id)->create();
+        $searchToken = 'DATATABLE_BRANCH_LOOKUP_' . substr(uniqid(), -6);
 
-        $response = $this->get(route('admin.suppliers.index', ['draw' => 1, 'start' => 0, 'length' => 25]));
+        $supplier = Supplier::factory()->forBranch($branch->id)->create([
+            'supplier_name' => $searchToken,
+        ]);
+
+        $response = $this->get(route('admin.suppliers.index', [
+            'draw'   => 1,
+            'start'  => 0,
+            'length' => 25,
+            'search' => ['value' => $searchToken],
+        ]));
 
         $response->assertOk();
         $data = $response->json('data');
-        $this->assertNotEmpty($data);
+        $this->assertNotEmpty($data, "DataTables response should contain at least the supplier matching search token '{$searchToken}'");
 
         $row = collect($data)->firstWhere('id', $supplier->id);
         $this->assertNotNull($row, 'DataTables response should include the created supplier');
