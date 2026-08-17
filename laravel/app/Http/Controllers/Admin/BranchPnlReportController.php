@@ -113,21 +113,29 @@ class BranchPnlReportController extends Controller
         $runningFyId = $runningFy ? (int) $runningFy->id : 0;
         $demandFyId = (int) $drilldown['demand']->fiscal_year_id;
         if ($demandFyId !== $runningFyId && $demandFyId > 0) {
-            // Verify via the Gate (FiscalYearPolicy). This calls
-            // FiscalYearPolicy::viewHistoricalData() which hard-denies
-            // for everyone (including super admin, via the Gate::before
-            // amendment in AppServiceProvider).
-            //
-            // IMPORTANT: load via Eloquent (App\Models\FiscalYear), NOT via
-            // DB::table('fiscal_years'). The policy's viewHistoricalData()
-            // method type-hints `FiscalYear $fy` — passing a stdClass (which
-            // DB::table returns) breaks policy resolution and can yield a
-            // 500 instead of the intended 403. We also bypass global scopes
-            // (BranchScope) here because the demand's FY might belong to a
-            // different branch than the authenticated user's; the policy is
-            // the authority, not the scope.
+            // Load via Eloquent (App\Models\FiscalYear), NOT via
+            // DB::table('fiscal_years'). The FiscalYearPolicy::
+            // viewHistoricalData() method type-hints `FiscalYear $fy` —
+            // passing a stdClass (which DB::table returns) breaks policy
+            // resolution. We also bypass global scopes (BranchScope) here
+            // because the demand's FY might belong to a different branch
+            // than the authenticated user's; the policy is the authority,
+            // not the scope.
             $fy = \App\Models\FiscalYear::withoutGlobalScopes()->find($demandFyId);
             if ($fy) {
+                // PRIMARY CHECK (defense-in-depth): a non-active FY is
+                // historical (closed/locked/draft) and must be blocked.
+                // This fires BEFORE the Gate call, so even if the Gate
+                // has a resolution quirk for the given user/FY combo,
+                // the closed-status path produces a clean 403.
+                if ($fy->status !== 'active') {
+                    abort(403, 'This demand belongs to a closed fiscal year and cannot be viewed.');
+                }
+                // SECONDARY CHECK (defense-in-depth): even if status is
+                // 'active' but the FY is not the running one, the policy's
+                // viewHistoricalData() method hard-denies for everyone
+                // (including super admin, via the Gate::before amendment
+                // in AppServiceProvider).
                 if (\Illuminate\Support\Facades\Gate::denies('viewHistoricalData', $fy)) {
                     abort(403, 'This demand belongs to a closed fiscal year and cannot be viewed.');
                 }

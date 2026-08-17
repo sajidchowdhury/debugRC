@@ -151,12 +151,18 @@ class DemandItemFifoResolverTest extends TestCase
             'updated_at'      => now(),
         ]);
 
+        // sales_invoice_items also has a NOT NULL fiscal_year_id column
+        // (config/fiscal.php line 45 — same S1 FY-isolation migration).
+        // Inherit the same FY as the parent sales_invoice (created above
+        // via $this->resolveActiveFiscalYearId()) so the rows are
+        // FY-consistent.
         return DB::table('sales_invoice_items')->insertGetId([
             'sales_invoice_id'        => $siId,
             'product_id'              => $productId,
             'qty'                     => $qty,
             'rate'                    => 12.00,
             'branch_demand_item_id'   => $branchDemandItemId,
+            'fiscal_year_id'          => $this->resolveActiveFiscalYearId(),
         ]);
     }
 
