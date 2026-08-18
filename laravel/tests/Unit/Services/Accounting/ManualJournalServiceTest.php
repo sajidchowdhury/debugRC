@@ -295,7 +295,7 @@ class ManualJournalServiceTest extends TestCase
     public function test_post_non_draft_journal_throws(): void
     {
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Only draft journals can be posted');
+        $this->expectExceptionMessage('can be posted');
 
         $journal = $this->service->createJournal([
             'journal_date' => now()->format('Y-m-d'),

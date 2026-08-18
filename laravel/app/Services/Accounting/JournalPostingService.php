@@ -275,6 +275,16 @@ class JournalPostingService
                     'updated_at' => now(),
                 ]);
 
+            // Set reversal_of_entry_id on the REVERSAL entry so it points
+            // back to the original (audit-chain convention used by
+            // ReversalVerify, SalesAuditService, and ManualJournal tests).
+            DB::table('journal_entries')
+                ->where('id', $reversalId)
+                ->update([
+                    'reversal_of_entry_id' => $journalEntryId,
+                    'updated_at' => now(),
+                ]);
+
             // Log the reversal.
             DB::table('journal_posting_logs')->insert([
                 'journal_entry_id' => $journalEntryId,

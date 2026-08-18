@@ -55,7 +55,8 @@ return new class extends Migration
         'stock_adjustment_items',
         'stock_take_sessions',
         'stock_take_warehouses',
-        'stock_take_items',
+        // Note: stock_take_items does NOT have fiscal_year_id column
+        // (inherits FY scope via parent stock_take_sessions)
         'warehouse_transfers',
         'warehouse_transfer_items',
         'damage_invoices',

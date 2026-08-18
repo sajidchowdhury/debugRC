@@ -36,6 +36,12 @@ abstract class TestCase extends BaseTestCase
     {
         parent::setUp();
 
+        // Flush the FiscalYearResolver cache so each test resolves from DB.
+        // Without this, a test that creates an FY and caches its ID would
+        // leave a stale entry after DatabaseTransactions rolls back — the
+        // next test would use a non-existent FY id and get 500 errors.
+        \App\Support\FiscalYearResolver::clearCache();
+
         // Remove middleware that depends on Redis, external services, or
         // investigation-mode behavior. We keep the `role` alias so RBAC
         // tests exercise EnsureRole directly.

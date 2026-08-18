@@ -329,14 +329,16 @@ class BranchDemandApiTest extends TestCase
             ]);
 
             // Repricing arithmetic — original=1000, new=1200, adjustment=+200.
-            $response->assertJsonPath('repricing.original_total', 1000.00);
-            $response->assertJsonPath('repricing.new_total', 1200.00);
-            $response->assertJsonPath('repricing.adjustment_amount', 200.00);
+            // JSON encodes round floats as ints (1000.0 → 1000), so use
+            // (float) cast on the decoded value for type-safe comparison.
+            $this->assertEquals(1000.00, (float) $response->json('repricing.original_total'));
+            $this->assertEquals(1200.00, (float) $response->json('repricing.new_total'));
+            $this->assertEquals(200.00, (float) $response->json('repricing.adjustment_amount'));
 
             // The demand's total_value should now reflect the new total.
             $response->assertJsonPath('data.id', $demandId);
             $response->assertJsonPath('data.status', 'received');
-            $response->assertJsonPath('data.total_value', 1200.00);
+            $this->assertEquals(1200.00, (float) $response->json('data.total_value'));
 
             // DB assertion: the repricing record was persisted.
             $this->assertDatabaseHas('branch_demand_repricing', [

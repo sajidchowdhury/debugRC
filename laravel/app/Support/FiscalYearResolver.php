@@ -87,7 +87,15 @@ class FiscalYearResolver
             function (): int {
                 // Resolution rule: status='active' AND is_current=true first,
                 // then status='active' alone, then is_current=true alone.
-                $id = FiscalYear::query()
+                //
+                // IMPORTANT: bypass BranchScope global scope. FiscalYear with
+                // branch_id=NULL is a global/shared fiscal year visible to all
+                // branches. The BranchScope would filter it out for non-admin
+                // users (where branch_id = user's branch != NULL), causing
+                // activeId() to throw "No active fiscal year found" for
+                // non-admin requests — which cascades as 500 errors across
+                // dashboard, reports, and API endpoints.
+                $id = FiscalYear::withoutGlobalScope(\App\Models\Scopes\BranchScope::class)
                     ->where(function ($q) {
                         $q->where('status', 'active')
                           ->orWhere('is_current', true);

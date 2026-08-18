@@ -308,7 +308,8 @@ class StockTakeService
                     'post_rate' => null,
                     'revaluation_amount' => 0,
                     'revaluation_line_id' => null,
-                    'fiscal_year_id' => FiscalYearResolver::activeId(),
+                    // Note: stock_take_items does NOT have a fiscal_year_id column
+                    // (it inherits FY scope via the parent stock_take_sessions)
                     'updated_at' => $now,
                 ];
             }

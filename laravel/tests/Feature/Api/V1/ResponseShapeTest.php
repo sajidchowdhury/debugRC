@@ -6,6 +6,7 @@ use App\Models\Branch;
 use App\Models\Warehouse;
 use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\IssuesApiTokens;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -60,7 +61,7 @@ use Tests\TestCase;
  */
 class ResponseShapeTest extends TestCase
 {
-    use BuildsRoleUsers, IssuesApiTokens;
+    use BuildsRoleUsers, IssuesApiTokens, ResolvesActiveFiscalYear;
 
     // ====================================================================
     // PAGINATION SHAPE — 4 tests, one per originally-divergent controller

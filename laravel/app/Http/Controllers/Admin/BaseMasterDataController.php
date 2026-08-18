@@ -432,7 +432,7 @@ abstract class BaseMasterDataController extends Controller
         }
 
         $filtered = $query->count();
-        $items = $query->skip($start)->take($length)->get();
+        $items = $query->orderBy('id', 'desc')->skip($start)->take($length)->get();
 
         return response()->json([
             'draw' => $draw,
