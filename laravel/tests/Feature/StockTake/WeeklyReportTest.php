@@ -11,6 +11,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\InsertsBranchDependencies;
 use Tests\Helpers\InsertsWarehouseDependencies;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -61,7 +62,7 @@ use Tests\TestCase;
  */
 class WeeklyReportTest extends TestCase
 {
-    use BuildsRoleUsers, InsertsBranchDependencies, InsertsWarehouseDependencies;
+    use BuildsRoleUsers, InsertsBranchDependencies, InsertsWarehouseDependencies, ResolvesActiveFiscalYear;
 
     protected StockTakeService $service;
     protected StockTakeWeeklyReport $report;
@@ -69,6 +70,7 @@ class WeeklyReportTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->resolveActiveFiscalYearId();
         $this->actingAsRole('admin');
         $this->service = app(StockTakeService::class);
         $this->report = app(StockTakeWeeklyReport::class);

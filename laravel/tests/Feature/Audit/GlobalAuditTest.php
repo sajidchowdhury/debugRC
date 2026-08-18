@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\Warehouse;
 use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -31,11 +32,13 @@ use Tests\TestCase;
 class GlobalAuditTest extends TestCase
 {
     use BuildsRoleUsers;
+    use ResolvesActiveFiscalYear;
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->actingAsRole('admin');
+        $this->resolveActiveFiscalYearId();
     }
 
     /**

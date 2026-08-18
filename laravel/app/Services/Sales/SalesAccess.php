@@ -67,6 +67,28 @@ class SalesAccess
     }
 
     /**
+     * Assert the authenticated user is an admin or superadmin.
+     *
+     * Note: User::isAdmin() already covers both 'admin' and 'superadmin'
+     * roles, so a separate isSuperadmin() check is not needed here.
+     *
+     * @throws RuntimeException If not authenticated or not admin-tier.
+     */
+    public function assertAdmin(): void
+    {
+        if (!Auth::check()) {
+            throw new RuntimeException('Authentication required.');
+        }
+
+        /** @var \App\Models\User $user */
+        $user = Auth::user();
+
+        if (!$user->isAdmin()) {
+            throw new RuntimeException('Admin access required.');
+        }
+    }
+
+    /**
      * Assert the user can dispatch (create) an invoice for the given branch.
      *
      * Unlike assertBranchAccessible() which blocks cross-branch READ access,

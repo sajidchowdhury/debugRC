@@ -7,6 +7,7 @@ use App\Models\CommissionRule;
 use App\Models\Employee;
 use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\IssuesApiTokens;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -32,6 +33,7 @@ use Tests\TestCase;
 class CommissionApiTest extends TestCase
 {
     use BuildsRoleUsers, IssuesApiTokens;
+    use ResolvesActiveFiscalYear;
 
     private $admin;
     private $salesman;
@@ -41,6 +43,7 @@ class CommissionApiTest extends TestCase
         parent::setUp();
 
         $this->admin = $this->makeRoleUser('admin');
+        $this->resolveActiveFiscalYearId();
         // Create a salesman Employee for commission rule linkage.
         $this->salesman = Employee::factory()
             ->forBranch($this->admin->getBranchId())

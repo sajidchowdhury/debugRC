@@ -119,6 +119,11 @@ return new class extends Migration
             \$\$ LANGUAGE plpgsql;
         ");
 
+        // Safety: drop any stale trigger on tables that do NOT have fiscal_year_id.
+        // stock_take_items inherits FY scope via parent stock_take_sessions
+        // and does NOT carry the fiscal_year_id column.
+        DB::unprepared("DROP TRIGGER IF EXISTS trg_fy_default_stock_take_items ON stock_take_items;");
+
         // Create triggers on each fiscal-scoped table
         foreach (self::FISCAL_TABLES as $table) {
             $triggerName = "trg_fy_default_{$table}";

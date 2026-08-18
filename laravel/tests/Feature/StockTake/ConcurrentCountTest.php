@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\InsertsBranchDependencies;
 use Tests\Helpers\InsertsWarehouseDependencies;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -68,13 +69,14 @@ use Tests\TestCase;
  */
 class ConcurrentCountTest extends TestCase
 {
-    use BuildsRoleUsers, InsertsBranchDependencies, InsertsWarehouseDependencies;
+    use BuildsRoleUsers, InsertsBranchDependencies, InsertsWarehouseDependencies, ResolvesActiveFiscalYear;
 
     protected StockTakeService $service;
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->resolveActiveFiscalYearId();
         $this->actingAsRole('admin');
         $this->service = app(StockTakeService::class);
 

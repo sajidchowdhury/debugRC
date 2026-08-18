@@ -10,6 +10,7 @@ use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\InsertsBranchDependencies;
 use Tests\Helpers\InsertsWarehouseDependencies;
 use Tests\Helpers\IssuesApiTokens;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -80,6 +81,7 @@ use Tests\TestCase;
 class StockTakeSessionApiTest extends TestCase
 {
     use BuildsRoleUsers, IssuesApiTokens, InsertsBranchDependencies, InsertsWarehouseDependencies;
+    use ResolvesActiveFiscalYear;
 
     protected StockTakeService $service;
 
@@ -91,6 +93,7 @@ class StockTakeSessionApiTest extends TestCase
 
         // Flush the policy cache so each test starts from a fresh read.
         app(StockTakePolicyService::class)->flushCache();
+        $this->resolveActiveFiscalYearId();
     }
 
     /**

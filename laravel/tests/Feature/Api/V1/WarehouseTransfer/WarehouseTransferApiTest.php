@@ -9,6 +9,7 @@ use Tests\Helpers\InsertsBranchDependencies;
 use Tests\Helpers\InsertsProductDependencies;
 use Tests\Helpers\InsertsWarehouseDependencies;
 use Tests\Helpers\IssuesApiTokens;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -44,6 +45,7 @@ class WarehouseTransferApiTest extends TestCase
 {
     use BuildsRoleUsers, IssuesApiTokens;
     use InsertsBranchDependencies, InsertsWarehouseDependencies, InsertsProductDependencies;
+    use ResolvesActiveFiscalYear;
 
     private User $adminUser;
     private int $branchId;
@@ -54,6 +56,7 @@ class WarehouseTransferApiTest extends TestCase
 
         $this->adminUser = $this->makeRoleUser('admin');
         $this->branchId  = $this->adminUser->getBranchId();
+        $this->resolveActiveFiscalYearId();
     }
 
     // ====================================================================

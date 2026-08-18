@@ -9,6 +9,7 @@ use App\Models\SalesInvoice;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
 use Tests\Helpers\BuildsRoleUsers;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -54,6 +55,7 @@ use Tests\TestCase;
 class UserPerformanceDashboardTest extends TestCase
 {
     use BuildsRoleUsers;
+    use ResolvesActiveFiscalYear;
 
     /**
      * Flush the per-user metric cache before each test so cached values
@@ -66,6 +68,7 @@ class UserPerformanceDashboardTest extends TestCase
     {
         parent::setUp();
         Cache::flush();
+        $this->resolveActiveFiscalYearId();
     }
 
     // ====================================================================

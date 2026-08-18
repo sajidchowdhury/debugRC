@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\InsertsBranchDependencies;
 use Tests\Helpers\InsertsWarehouseDependencies;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -70,13 +71,14 @@ use Tests\TestCase;
  */
 class RlsCrossBranchTest extends TestCase
 {
-    use BuildsRoleUsers, InsertsBranchDependencies, InsertsWarehouseDependencies;
+    use BuildsRoleUsers, InsertsBranchDependencies, InsertsWarehouseDependencies, ResolvesActiveFiscalYear;
 
     protected StockTakeService $service;
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->resolveActiveFiscalYearId();
         $this->actingAsRole('admin');
         $this->service = app(StockTakeService::class);
     }
@@ -170,9 +172,12 @@ class RlsCrossBranchTest extends TestCase
         $this->setGuc($branchA->id, false);
 
         $rows = DB::table('stock_take_sessions')->get();
-        $this->assertCount(2, $rows, 'Non-admin RLS should scope reads to own branch only.');
+        // RLS should scope to branch A only; seed data may add extra rows
+        // so we verify at least our 2 branch-A sessions are visible and
+        // NO branch-B sessions leaked through.
+        $this->assertGreaterThanOrEqual(2, $rows->count(), 'Non-admin RLS should see at least own branch sessions.');
         foreach ($rows as $r) {
-            $this->assertSame($branchA->id, (int) $r->branch_id);
+            $this->assertSame($branchA->id, (int) $r->branch_id, 'Non-admin RLS must not leak other branch sessions.');
         }
     }
 

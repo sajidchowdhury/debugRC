@@ -1679,7 +1679,7 @@ SQL, [$data['from'], $data['to']]);
         $user = $request->user();
         if (!$user?->isSuperadmin()) {
             $fiscalYear = \App\Models\FiscalYear::where('is_current', true)
-                ->where('status', 'open')
+                ->where('status', 'active')
                 ->first();
             if ($fiscalYear) {
                 $fyEnd = Carbon::parse($fiscalYear->end_date);
@@ -1757,7 +1757,7 @@ SQL, [$data['from'], $data['to']]);
 
         // Find the current fiscal year
         $fiscalYear = \App\Models\FiscalYear::where('is_current', true)
-            ->where('status', 'open')
+            ->where('status', 'active')
             ->first();
 
         if (!$fiscalYear) {

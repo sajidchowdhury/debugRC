@@ -9,6 +9,7 @@ use Tests\Helpers\InsertsBranchDependencies;
 use Tests\Helpers\InsertsProductDependencies;
 use Tests\Helpers\InsertsWarehouseDependencies;
 use Tests\Helpers\IssuesApiTokens;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -47,6 +48,7 @@ class StockAdjustmentApiTest extends TestCase
 {
     use BuildsRoleUsers, IssuesApiTokens;
     use InsertsBranchDependencies, InsertsWarehouseDependencies, InsertsProductDependencies;
+    use ResolvesActiveFiscalYear;
 
     private User $adminUser;
     private int $branchId;
@@ -57,6 +59,7 @@ class StockAdjustmentApiTest extends TestCase
 
         $this->adminUser = $this->makeRoleUser('admin');
         $this->branchId  = $this->adminUser->getBranchId();
+        $this->resolveActiveFiscalYearId();
     }
 
     // ====================================================================

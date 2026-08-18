@@ -5,6 +5,7 @@ namespace Tests\Feature\Reports;
 use App\Models\User;
 use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\InsertsLedgerDependencies;
+use Tests\Helpers\ResolvesActiveFiscalYear;
 use Tests\TestCase;
 
 /**
@@ -51,6 +52,7 @@ class FinancialReportControllerTest extends TestCase
 {
     use BuildsRoleUsers;
     use InsertsLedgerDependencies;
+    use ResolvesActiveFiscalYear;
 
     private User $admin;
 
@@ -79,6 +81,7 @@ class FinancialReportControllerTest extends TestCase
             'ledger_nature' => 'ap',
         ]);
         $this->insertBalancedJournalPair($dr, $cr, 1000.00, $branchId);
+        $this->resolveActiveFiscalYearId();
     }
 
     // ====================================================================

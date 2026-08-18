@@ -202,7 +202,8 @@ class WarehouseTransferService
 
         return DB::transaction(function () use (
             $transferCode, $data, $fromWarehouseId, $toWarehouseId,
-            $fromBranchId, $toBranchId, $isInterbranch, $validatedItems
+            $fromBranchId, $toBranchId, $isInterbranch, $validatedItems,
+            $totalAmount
         ) {
             $transferId = DB::table('warehouse_transfers')->insertGetId([
                 'transfer_code' => $transferCode,
