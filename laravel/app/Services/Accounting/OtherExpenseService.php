@@ -5,6 +5,7 @@ namespace App\Services\Accounting;
 use App\Models\OtherExpense;
 use App\Models\Bank;
 use App\Models\BankLedgerMapping;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -71,6 +72,7 @@ class OtherExpenseService
                 'description'  => $data['description'] ?? null,
                 'is_reversed'  => false,
                 'created_by'   => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at'   => now(),
                 'updated_at'   => now(),
             ]);

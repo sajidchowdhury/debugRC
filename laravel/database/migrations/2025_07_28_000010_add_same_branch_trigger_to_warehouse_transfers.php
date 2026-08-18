@@ -33,7 +33,8 @@ return new class extends Migration
             CREATE OR REPLACE FUNCTION enforce_same_branch_transfer()
             RETURNS TRIGGER AS \$\$
             BEGIN
-                IF NEW.from_branch_id != NEW.to_branch_id THEN
+                -- Allow interbranch transfers created by Branch Demand module
+                IF NEW.from_branch_id != NEW.to_branch_id AND NOT NEW.is_interbranch THEN
                     RAISE EXCEPTION 'Cross-branch warehouse transfers are not allowed (from_branch=%, to_branch=%). Use Branch Demand module instead.',
                         NEW.from_branch_id, NEW.to_branch_id
                         USING ERRCODE = 'check_violation';

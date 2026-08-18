@@ -259,14 +259,15 @@ class CsvExporterTest extends TestCase
 
     /**
      * Slugification of spaces + special chars: 'Trial Balance' (space)
-     * + 'S/E Dept' (slash) → 'trial_balance_s_e_dept_...csv'. Both
-     * spaces and slashes are treated as separators by Str::slug.
+     * + 'S/E Dept' (slash) → 'trial_balance_se_dept_...csv'. Both
+     * spaces and slashes are treated as separators by Str::slug;
+     * single-letter segments merge without extra underscores.
      */
     public function test_filename_slugifies_spaces_and_special_chars(): void
     {
         $filename = $this->exporter->filename('Trial Balance', ['S/E Dept']);
 
-        $this->assertStringContainsString('trial_balance_s_e_dept_', $filename);
+        $this->assertStringContainsString('trial_balance_se_dept_', $filename);
         $this->assertStringEndsWith('.csv', $filename);
     }
 

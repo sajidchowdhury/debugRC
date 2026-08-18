@@ -198,9 +198,11 @@ class BranchDemandApiController extends Controller
             return $this->notFound("Demand {$id} not found.");
         }
 
-        // Branch isolation check
+        // Branch isolation check (admins bypass — they can see any demand)
+        $user = Auth::user();
         $branchId = $this->currentBranchId();
-        if ($demand->from_branch_id !== $branchId && $demand->to_branch_id !== $branchId) {
+        $isAdmin = $user && method_exists($user, 'isAdmin') && $user->isAdmin();
+        if (!$isAdmin && $demand->from_branch_id !== $branchId && $demand->to_branch_id !== $branchId) {
             return response()->json([
                 'message' => 'Forbidden. You do not have access to this demand.',
             ], 403);

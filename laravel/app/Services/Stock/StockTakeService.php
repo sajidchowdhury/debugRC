@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Services\Stock\StockTakeAuditLogger;
 use App\Services\Stock\StockTakePolicyService;
+use App\Support\FiscalYearResolver;
 
 /**
  * Stock Take Service — Phase 6.4.
@@ -154,6 +155,7 @@ class StockTakeService
                     : json_encode($countScopePayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'notes' => $data['notes'] ?? null,
                 'created_by' => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
@@ -172,6 +174,7 @@ class StockTakeService
                         'branch_id' => (int) $data['branch_id'],
                         'freeze_outbound' => $freezeOutbound,
                         'status' => 'pending',
+                        'fiscal_year_id' => FiscalYearResolver::activeId(),
                     ]);
                 } catch (\Illuminate\Database\QueryException $e) {
                     // Two expected SQLSTATEs from the stw insert:
@@ -305,6 +308,7 @@ class StockTakeService
                     'post_rate' => null,
                     'revaluation_amount' => 0,
                     'revaluation_line_id' => null,
+                    'fiscal_year_id' => FiscalYearResolver::activeId(),
                     'updated_at' => $now,
                 ];
             }
@@ -2015,13 +2019,14 @@ class StockTakeService
      */
     private function assertNoNegativeStockOutcomes(int $sessionId): void
     {
-        // Step 1: Get the shortage items + product info. sti rows are
-        // session-owned (no concurrent writer can touch them), so no lock
+        // Step 1: Get the shortage items + product + warehouse info. sti rows
+        // are session-owned (no concurrent writer can touch them), so no lock
         // is needed on this query. We only need the (warehouse_id,
-        // product_id) pairs + the system/physical qty + product names for
-        // the error message.
+        // product_id) pairs + the system/physical qty + product + warehouse
+        // names for the error message.
         $shortages = DB::table('stock_take_items as sti')
             ->join('products as p', 'p.id', '=', 'sti.product_id')
+            ->join('warehouses as w', 'w.id', '=', 'sti.warehouse_id')
             ->where('sti.stock_take_session_id', $sessionId)
             ->where('sti.is_applied', false)
             ->whereRaw('sti.physical_qty < sti.system_qty')
@@ -2031,7 +2036,8 @@ class StockTakeService
                 'sti.system_qty',
                 'sti.physical_qty',
                 'p.product_code',
-                'p.product_name'
+                'p.product_name',
+                'w.warehouse_name'
             )
             ->get();
 
@@ -2070,6 +2076,7 @@ class StockTakeService
                     'product_code' => $s->product_code,
                     'product_name' => $s->product_name,
                     'warehouse_id' => $s->warehouse_id,
+                    'warehouse_name' => $s->warehouse_name,
                     'system_qty' => (float) $s->system_qty,
                     'physical_qty' => (float) $s->physical_qty,
                     'current_stock' => $currentQty,

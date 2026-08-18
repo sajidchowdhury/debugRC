@@ -11,6 +11,7 @@ use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
 use App\Services\DemandItemFifoResolver;
 use App\Services\Notification\NotificationService;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -115,6 +116,7 @@ class SalesReturnService
                 'is_reversed' => false,
                 'reason' => $data['reason'] ?? null,
                 'created_by' => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
@@ -130,6 +132,7 @@ class SalesReturnService
                     'rate' => $item['rate'],
                     'original_cost' => $item['original_cost'],
                     'condition_state' => $item['condition_state'] ?? 'Good', // Phase 4.3
+                    'fiscal_year_id' => FiscalYearResolver::activeId(),
                 ];
             }
             DB::table('sales_return_items')->insert($itemRows);

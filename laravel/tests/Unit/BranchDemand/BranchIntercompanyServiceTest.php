@@ -59,7 +59,7 @@ class BranchIntercompanyServiceTest extends TestCase
 
         $outstanding = $this->service->getOutstandingByBranch($branchId);
 
-        $this->assertIsArray($outstanding);
+        $this->assertInstanceOf(\Illuminate\Support\Collection::class, $outstanding);
         // The outstanding should reflect the 700.00 remaining balance
     }
 

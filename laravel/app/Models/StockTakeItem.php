@@ -36,6 +36,7 @@ class StockTakeItem extends Model
     public $timestamps = false;
 
     protected $fillable = [
+        'fiscal_year_id',
         'stock_take_session_id',
         'warehouse_id',
         'product_id',

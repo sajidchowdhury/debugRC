@@ -116,6 +116,7 @@ class DamageInvoice extends Model
     ];
 
     protected $fillable = [
+        'fiscal_year_id',
         'damage_code',
         'damage_date',
         'warehouse_id',

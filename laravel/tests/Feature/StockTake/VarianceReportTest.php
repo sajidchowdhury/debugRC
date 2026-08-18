@@ -325,7 +325,7 @@ class VarianceReportTest extends TestCase
         $this->assertInstanceOf(StreamedResponse::class, $response);
         $this->assertStringContainsString('text/csv', $response->headers->get('Content-Type'));
         $this->assertStringContainsString(
-            'attachment; filename="Stock_Take_Variance_',
+            'attachment; filename="stock_take_variance_',
             $response->headers->get('Content-Disposition')
         );
     }

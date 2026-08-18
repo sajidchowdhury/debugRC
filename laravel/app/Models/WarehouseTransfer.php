@@ -81,6 +81,7 @@ class WarehouseTransfer extends Model
     protected $dates = ['deleted_at'];
 
     protected $fillable = [
+        'fiscal_year_id',
         'transfer_code',
         'transfer_date',
         'from_warehouse_id',

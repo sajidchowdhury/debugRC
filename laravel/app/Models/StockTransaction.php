@@ -60,6 +60,7 @@ class StockTransaction extends Model
     public $timestamps = false;
 
     protected $fillable = [
+        'fiscal_year_id',
         'transaction_date',
         'warehouse_id',
         'product_id',

@@ -58,6 +58,7 @@ class BranchDemand extends Model
     public $timestamps = true;
 
     protected $fillable = [
+        'fiscal_year_id',
         'demand_code',
         'demand_date',
         'from_branch_id',
@@ -200,9 +201,20 @@ class BranchDemand extends Model
 
     /**
      * Scope: demands involving my branch (either direction).
+     *
+     * Admins bypass the branch filter — they see all demands across
+     * all branches (mirrors the RLS `app.is_admin = true` bypass policy
+     * for PostgreSQL-level access, and the SetApiBranchContext middleware
+     * which sets the GUC for API requests).
      */
     public function scopeForBranch(\Illuminate\Database\Eloquent\Builder $query, int $branchId): \Illuminate\Database\Eloquent\Builder
     {
+        // Admin bypass: admins see all demands regardless of branch.
+        $user = \Illuminate\Support\Facades\Auth::user();
+        if ($user && method_exists($user, 'isAdmin') && $user->isAdmin()) {
+            return $query;
+        }
+
         return $query->where(function ($q) use ($branchId) {
             $q->where('from_branch_id', $branchId)
               ->orWhere('to_branch_id', $branchId);

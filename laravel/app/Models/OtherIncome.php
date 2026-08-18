@@ -49,6 +49,7 @@ class OtherIncome extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'income_code', 'income_date', 'branch_id', 'payment_mode',
         'bank_id', 'income_type', 'amount', 'description',
         'journal_entry_id',

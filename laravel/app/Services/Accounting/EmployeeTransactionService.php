@@ -7,6 +7,7 @@ use App\Models\EmployeeLedger;
 use App\Models\Bank;
 use App\Models\BankLedgerMapping;
 use App\Services\Sales\CommissionService;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -125,6 +126,7 @@ class EmployeeTransactionService
                 'collected_by'     => $data['collected_by'] ?? null,
                 'is_reversed'      => false,
                 'created_by'       => $data['created_by'] ?? null,
+                'fiscal_year_id'   => FiscalYearResolver::activeId(),
                 'created_at'       => now(),
                 'updated_at'       => now(),
             ]);
@@ -800,6 +802,7 @@ class EmployeeTransactionService
             'journal_entry_id' => $debtorJeId,
             'is_reversed'      => false,
             'created_by'       => $createdBy,
+            'fiscal_year_id'   => FiscalYearResolver::activeId(),
             'created_at'       => now(),
         ]);
 

@@ -6,6 +6,7 @@ use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Auth\UserAuditLogger;
 use App\Services\Approval\ApprovalService;
 use App\Models\PurchaseOrder;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -83,6 +84,7 @@ class PurchaseOrderService
                 'expected_date' => $data['expected_date'] ?? null,
                 'notes' => $data['notes'] ?? null,
                 'created_by' => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
@@ -95,6 +97,7 @@ class PurchaseOrderService
                     'qty' => $item['qty'],
                     'received_qty' => 0,
                     'rate' => $item['rate'],
+                    'fiscal_year_id' => FiscalYearResolver::activeId(),
                 ];
             }
             DB::table('purchase_order_items')->insert($itemRows);
@@ -204,6 +207,7 @@ class PurchaseOrderService
                     'qty' => $item['qty'],
                     'received_qty' => 0,
                     'rate' => $item['rate'],
+                    'fiscal_year_id' => FiscalYearResolver::activeId(),
                 ];
             }
             DB::table('purchase_order_items')->insert($itemRows);

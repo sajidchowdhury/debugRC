@@ -3,6 +3,7 @@
 namespace App\Services\Accounting;
 
 use App\Services\Compliance\SystemPolicyService;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -137,6 +138,7 @@ class JournalPostingService
             'source' => $entry['source'] ?? 'manual',
             'is_reversed' => false,
             'created_by' => $entry['created_by'] ?? null,
+            'fiscal_year_id' => FiscalYearResolver::activeId(),
             'created_at' => now(),
             'updated_at' => now(),
         ]);
@@ -154,6 +156,7 @@ class JournalPostingService
                 'entity_id' => $line['entity_id'] ?? null,
                 'memo' => $line['memo'] ?? null,
                 'dimension_value_id' => $line['dimension_value_id'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
             ];
         }
         DB::table('journal_lines')->insert($lineRows);

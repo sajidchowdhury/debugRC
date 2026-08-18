@@ -49,6 +49,7 @@ class OtherExpense extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'expense_code', 'expense_date', 'branch_id', 'payment_mode',
         'bank_id', 'expense_type', 'amount', 'description',
         'journal_entry_id',

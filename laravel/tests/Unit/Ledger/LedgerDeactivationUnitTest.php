@@ -60,6 +60,21 @@ class LedgerDeactivationUnitTest extends TestCase
         return Ledger::factory()->create($overrides);
     }
 
+    /**
+     * Soft-delete + deactivate all existing active ledgers with the given
+     * nature so that a subsequently created ledger becomes the sole active
+     * one for that nature (required for the "sole active" blocker tests
+     * since the seed data already contains active critical-nature ledgers).
+     */
+    private function deactivateExistingLedgersOfNature(string $nature): void
+    {
+        DB::table('ledgers')
+            ->where('ledger_nature', $nature)
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->update(['is_active' => false, 'deleted_at' => now()]);
+    }
+
     // ====================================================================
     // Happy path — no blockers
     // ====================================================================
@@ -238,6 +253,7 @@ class LedgerDeactivationUnitTest extends TestCase
 
     public function test_cannot_deactivate_sole_active_critical_nature_ledger(): void
     {
+        $this->deactivateExistingLedgersOfNature('cash_bank');
         $ledger = $this->makeLedger(['ledger_nature' => 'cash_bank']);
 
         $result = $this->callCanDeactivate($ledger);
@@ -262,6 +278,7 @@ class LedgerDeactivationUnitTest extends TestCase
     public function test_sole_active_blocker_covers_all_7_critical_natures(): void
     {
         foreach (Ledger::criticalNatures() as $nature) {
+            $this->deactivateExistingLedgersOfNature($nature);
             $ledger = $this->makeLedger(['ledger_nature' => $nature]);
 
             $result = $this->callCanDeactivate($ledger);
@@ -278,6 +295,7 @@ class LedgerDeactivationUnitTest extends TestCase
     {
         // An inactive ledger with the same nature doesn't satisfy the
         // resolver — sole-active block still triggers.
+        $this->deactivateExistingLedgersOfNature('ar');
         $active = $this->makeLedger(['ledger_nature' => 'ar']);
         $this->makeLedger(['ledger_nature' => 'ar', 'is_active' => false]);
 
@@ -289,6 +307,7 @@ class LedgerDeactivationUnitTest extends TestCase
 
     public function test_sole_active_blocker_ignores_soft_deleted_ledgers_with_same_nature(): void
     {
+        $this->deactivateExistingLedgersOfNature('inventory');
         $active = $this->makeLedger(['ledger_nature' => 'inventory']);
         $this->insertLedger([
             'ledger_nature' => 'inventory',
@@ -322,6 +341,7 @@ class LedgerDeactivationUnitTest extends TestCase
 
     public function test_sole_active_and_child_blockers_both_appear_in_message(): void
     {
+        $this->deactivateExistingLedgersOfNature('cash_bank');
         $parent = $this->makeLedger(['ledger_nature' => 'cash_bank']);
         $this->insertChildLedger($parent->id);
 
@@ -334,6 +354,7 @@ class LedgerDeactivationUnitTest extends TestCase
 
     public function test_all_three_non_system_blockers_appear_in_message(): void
     {
+        $this->deactivateExistingLedgersOfNature('cash_bank');
         $parent = $this->makeLedger(['ledger_nature' => 'cash_bank']);
         $otherLedger = $this->makeLedger();
         $this->insertBalancedJournalPair($parent->id, $otherLedger->id);

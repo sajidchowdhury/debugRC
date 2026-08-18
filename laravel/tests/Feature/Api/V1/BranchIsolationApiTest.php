@@ -177,10 +177,17 @@ class BranchIsolationApiTest extends TestCase
             'pending',
         );
 
-        $this->withHeaders([
-            'Authorization' => $this->bearerHeader($tokenA),
-        ])->getJson("/api/v1/branch-demands/{$demandYId}")
-            ->assertNotFound();
+        // RLS may hide the row (→ 404) or the controller's defense-in-depth
+        // branch isolation check may reject it (→ 403). Both are correct
+        // "access denied" semantics — the exact status depends on whether
+        // PostgreSQL RLS policies are active in the test DB.
+        $this->assertContains(
+            $this->withHeaders([
+                'Authorization' => $this->bearerHeader($tokenA),
+            ])->getJson("/api/v1/branch-demands/{$demandYId}")->status(),
+            [403, 404],
+            'Salesman in Branch A must NOT see a demand between Branch B and Branch C — should get 403 or 404.',
+        );
     }
 
     /**

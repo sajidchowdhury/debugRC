@@ -8,6 +8,7 @@ use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\WarehouseTransferAuditLogger;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -217,6 +218,7 @@ class WarehouseTransferService
                 'is_reversed' => false,
                 'notes' => $data['notes'] ?? null,
                 'created_by' => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
@@ -228,6 +230,7 @@ class WarehouseTransferService
                     'product_id' => $item['product_id'],
                     'qty' => $item['qty'],
                     'rate' => $item['rate'],
+                    'fiscal_year_id' => FiscalYearResolver::activeId(),
                 ];
             }
             DB::table('warehouse_transfer_items')->insert($itemRows);

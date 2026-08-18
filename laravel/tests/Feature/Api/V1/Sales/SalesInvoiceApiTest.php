@@ -100,7 +100,9 @@ class SalesInvoiceApiTest extends TestCase
         // Cached payload returned verbatim.
         $response->assertJsonPath('data.id', 99999);
         $response->assertJsonPath('data.invoice_code', 'INV-IDEM-001');
-        $response->assertJsonPath('data.total', 1500.00);
+        // Use assertEquals (loose) instead of assertJsonPath (strict same)
+        // because JSON round-trip converts 1500.0 → 1500 (int).
+        $this->assertEquals(1500.00, $response->json('data.total'));
 
         // Cache entry must still exist (replay does not evict).
         $this->assertNotNull(Cache::get($cacheKey));

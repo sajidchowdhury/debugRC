@@ -17,8 +17,20 @@ class CodeGeneratorTest extends TestCase
 {
     use BuildsRoleUsers;
 
+    /**
+     * Delete all existing L- prefixed ledger codes so tests start from a
+     * clean slate (the seed data contains L- codes that would otherwise
+     * cause "starts at L-0001" assertions to fail).
+     */
+    private function cleanupLedgerCodes(): void
+    {
+        Ledger::where('ledger_code', 'LIKE', 'L-%')->delete();
+    }
+
     public function test_ledger_code_starts_at_L_0001_when_empty(): void
     {
+        $this->cleanupLedgerCodes();
+
         $code = CodeGenerator::ledgerCode();
 
         $this->assertEquals('L-0001', $code);
@@ -26,6 +38,7 @@ class CodeGeneratorTest extends TestCase
 
     public function test_ledger_code_increments_from_existing_max(): void
     {
+        $this->cleanupLedgerCodes();
         Ledger::factory()->create(['ledger_code' => 'L-0005']);
 
         $code = CodeGenerator::ledgerCode();
@@ -35,6 +48,7 @@ class CodeGeneratorTest extends TestCase
 
     public function test_ledger_code_handles_non_sequential_existing_codes(): void
     {
+        $this->cleanupLedgerCodes();
         Ledger::factory()->create(['ledger_code' => 'L-0003']);
         Ledger::factory()->create(['ledger_code' => 'L-0007']);
         Ledger::factory()->create(['ledger_code' => 'L-0002']);
@@ -46,6 +60,7 @@ class CodeGeneratorTest extends TestCase
 
     public function test_ledger_code_ignores_other_prefixes(): void
     {
+        $this->cleanupLedgerCodes();
         Ledger::factory()->create(['ledger_code' => 'L-0010']);
         Ledger::factory()->create(['ledger_code' => 'CUSTOM-001']);
         Ledger::factory()->create(['ledger_code' => 'AR-0001']);

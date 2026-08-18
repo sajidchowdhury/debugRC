@@ -32,20 +32,13 @@ return new class extends Migration
         ");
 
         // Update the same-branch trigger function to allow interbranch
-        // when the transfer is linked to a branch demand (Phase 3.3).
-        // Although WarehouseTransferService won't create such transfers,
-        // the Branch Demand module may create them via a different path.
+        // transfers when is_interbranch is true (created by Branch Demand module).
         DB::statement("
             CREATE OR REPLACE FUNCTION enforce_same_branch_transfer()
             RETURNS trigger AS \$\$
             BEGIN
-                -- If linked to a branch demand, same-branch enforcement is
-                -- relaxed (Branch Demand handles interbranch via its own flow).
-                IF NEW.branch_demand_id IS NOT NULL THEN
-                    RETURN NEW;
-                END IF;
-
-                IF NEW.from_branch_id IS DISTINCT FROM NEW.to_branch_id THEN
+                -- Allow interbranch transfers created by Branch Demand module
+                IF NEW.from_branch_id IS DISTINCT FROM NEW.to_branch_id AND NOT NEW.is_interbranch THEN
                     RAISE EXCEPTION 'Cross-branch warehouse transfers are not allowed in this module. Use the Branch Demand module instead.'
                         USING ERRCODE = 'check_violation';
                 END IF;
@@ -67,12 +60,13 @@ return new class extends Migration
             DROP COLUMN IF EXISTS branch_demand_id
         ");
 
-        // Restore the original trigger function (strict same-branch only)
+        // Restore the original trigger function (strict same-branch only,
+        // but still allow is_interbranch transfers)
         DB::statement("
             CREATE OR REPLACE FUNCTION enforce_same_branch_transfer()
             RETURNS trigger AS \$\$
             BEGIN
-                IF NEW.from_branch_id IS DISTINCT FROM NEW.to_branch_id THEN
+                IF NEW.from_branch_id IS DISTINCT FROM NEW.to_branch_id AND NOT NEW.is_interbranch THEN
                     RAISE EXCEPTION 'Cross-branch warehouse transfers are not allowed in this module. Use the Branch Demand module instead.'
                         USING ERRCODE = 'check_violation';
                 END IF;

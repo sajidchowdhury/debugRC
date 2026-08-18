@@ -102,7 +102,7 @@ class SalesCartApiTest extends TestCase
 
         $response->assertOk();
         $response->assertJsonStructure([
-            'data' => ['cart', 'items', 'subtotal', 'validation'],
+            'data' => ['cart_id', 'customer_id', 'branch_id', 'items', 'subtotal', 'validation'],
         ]);
         $this->assertSame(0, $response->json('data.subtotal'));
         $this->assertEmpty($response->json('data.items'));

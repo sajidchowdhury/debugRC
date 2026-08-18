@@ -79,6 +79,7 @@ class PurchaseOrder extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'po_code',
         'po_date',
         'supplier_id',

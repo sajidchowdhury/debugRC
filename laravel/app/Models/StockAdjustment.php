@@ -151,6 +151,7 @@ class StockAdjustment extends Model
     ];
 
     protected $fillable = [
+        'fiscal_year_id',
         'adjustment_code',
         'adjustment_date',
         'warehouse_id',

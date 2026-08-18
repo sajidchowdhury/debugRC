@@ -63,6 +63,7 @@ class SalesChallan extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'challan_code', 'challan_date', 'sales_invoice_id', 'branch_id',
         'transport_name', 'transport_phone', 'vehicle_number', 'driver_name',
         'transport_cost', 'transport_adjustment',

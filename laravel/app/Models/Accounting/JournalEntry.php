@@ -14,6 +14,7 @@ class JournalEntry extends Model
     public $timestamps = true;
 
     protected $fillable = [
+        'fiscal_year_id',
         'entry_no', 'entry_date', 'reference_type', 'reference_id',
         'branch_id', 'description', 'source', 'is_reversed',
         'reversal_of_entry_id', 'reversed_at', 'reversed_by',

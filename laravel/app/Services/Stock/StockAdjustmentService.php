@@ -7,6 +7,7 @@ use App\Models\StockAdjustmentItem;
 use App\Models\User;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -199,6 +200,7 @@ class StockAdjustmentService
                 'status' => 'draft',
                 'is_reversed' => false,
                 'created_by' => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
@@ -221,6 +223,7 @@ class StockAdjustmentService
                     'uom_factor'  => $item['uom_factor'],  // Phase 5
                     'rate'        => $item['rate'],
                     'reason'      => $item['reason'],
+                    'fiscal_year_id' => FiscalYearResolver::activeId(),
                 ];
             }
             DB::table('stock_adjustment_items')->insert($itemRows);

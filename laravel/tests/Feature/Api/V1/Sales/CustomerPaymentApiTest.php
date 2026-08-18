@@ -94,7 +94,9 @@ class CustomerPaymentApiTest extends TestCase
         // Cached payload returned verbatim.
         $response->assertJsonPath('data.id', 88888);
         $response->assertJsonPath('data.payment_code', 'PAY-IDEM-001');
-        $response->assertJsonPath('data.amount', 5000.00);
+        // Use assertEquals (loose) instead of assertJsonPath (strict same)
+        // because JSON round-trip converts 5000.0 → 5000 (int).
+        $this->assertEquals(5000.00, $response->json('data.amount'));
         $response->assertJsonPath('confirmed', false);
 
         // Cache entry must still exist (replay does not evict).

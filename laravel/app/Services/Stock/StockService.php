@@ -4,6 +4,7 @@ namespace App\Services\Stock;
 
 use App\Exceptions\WarehouseFrozenForCountException;
 use App\Models\StockTransaction;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -104,6 +105,7 @@ class StockService
             'notes' => $data['notes'] ?? null,
             'is_reversed' => false,
             'created_by' => $data['created_by'] ?? null,
+            'fiscal_year_id' => FiscalYearResolver::activeId(),
             'created_at' => now(),
         ]);
 

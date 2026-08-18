@@ -30,6 +30,14 @@ class DashboardApiTest extends TestCase
     use BuildsRoleUsers, IssuesApiTokens;
     use ResolvesActiveFiscalYear;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // Flush the dashboard cache so each test sees freshly seeded data
+        // instead of stale cached results from a prior test/request.
+        \Illuminate\Support\Facades\Cache::flush();
+    }
+
     // ====================================================================
     // AUTH
     // ====================================================================

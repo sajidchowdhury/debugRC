@@ -11,6 +11,7 @@ use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
 use App\Services\Notification\NotificationService;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -364,6 +365,7 @@ class SalesChallanService
                 'is_reversed' => false,
                 'is_dispatch_soft_hold' => false,
                 'created_by' => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
@@ -410,6 +412,7 @@ class SalesChallanService
                     'qty' => $qty,
                     'issue_rate' => $avgCost,
                     // cogs_amount is GENERATED: qty * issue_rate (auto-computed by PostgreSQL)
+                    'fiscal_year_id' => FiscalYearResolver::activeId(),
                     'created_at' => now(),
                 ]);
 

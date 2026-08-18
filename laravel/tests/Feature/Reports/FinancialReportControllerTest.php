@@ -252,6 +252,7 @@ class FinancialReportControllerTest extends TestCase
     public function test_report_range_request_rejects_invalid_from_date(): void
     {
         $this->actingAs($this->admin)
+            ->withHeaders(['Accept' => 'application/json'])
             ->get(route('admin.reports.trialBalance', ['from_date' => 'not-a-date']))
             ->assertStatus(422);
     }
@@ -265,6 +266,7 @@ class FinancialReportControllerTest extends TestCase
     public function test_report_as_of_request_rejects_invalid_as_of_date(): void
     {
         $this->actingAs($this->admin)
+            ->withHeaders(['Accept' => 'application/json'])
             ->get(route('admin.reports.balanceSheet', ['as_of_date' => 'not-a-date']))
             ->assertStatus(422);
     }
@@ -276,6 +278,7 @@ class FinancialReportControllerTest extends TestCase
     public function test_report_range_request_rejects_invalid_format_value(): void
     {
         $this->actingAs($this->admin)
+            ->withHeaders(['Accept' => 'application/json'])
             ->get(route('admin.reports.profitAndLoss', ['format' => 'xml']))
             ->assertStatus(422);
     }

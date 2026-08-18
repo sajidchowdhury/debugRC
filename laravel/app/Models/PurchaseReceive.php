@@ -77,6 +77,7 @@ class PurchaseReceive extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'receive_code',
         'receive_date',
         'purchase_order_id',

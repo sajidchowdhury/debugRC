@@ -4,6 +4,7 @@ namespace App\Services\Accounting;
 
 use App\Models\Bank;
 use App\Models\MoneyTransfer;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -67,6 +68,7 @@ class MoneyTransferService
                 'is_reversed'    => false,
                 'notes'          => $data['notes'] ?? null,
                 'created_by'     => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at'     => now(),
                 'updated_at'     => now(),
             ]);
@@ -612,6 +614,7 @@ class MoneyTransferService
                 'journal_entry_id' => $debtorJeId,
                 'is_reversed'      => false,
                 'created_by'       => $createdBy,
+                'fiscal_year_id'   => FiscalYearResolver::activeId(),
                 'created_at'       => now(),
             ]);
 

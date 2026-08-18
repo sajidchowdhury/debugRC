@@ -15,6 +15,7 @@ use App\Services\Accounting\SubLedgerService;
 use App\Services\BranchDemand\BranchDemandService;
 use App\Services\Notification\NotificationService;
 use App\Services\DemandItemFifoResolver;
+use App\Support\FiscalYearResolver;
 use App\Support\PriceClassifier;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -204,6 +205,7 @@ class SalesInvoiceService
                 'is_soft_hold' => $data['is_soft_hold'] ?? false,
                 'notes' => $data['notes'] ?? null,
                 'created_by' => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
@@ -307,6 +309,7 @@ class SalesInvoiceService
                         'price_classification' => $classification,
                         'branch_demand_item_id' => null,
                         'below_min_override_id' => $belowMinOverrideId,
+                        'fiscal_year_id' => FiscalYearResolver::activeId(),
                     ];
                 } else {
                     // Split the cart line into one sales_invoice_items
@@ -329,6 +332,7 @@ class SalesInvoiceService
                             'price_classification' => $classification,
                             'branch_demand_item_id' => $alloc['demand_item_id'],
                             'below_min_override_id' => $belowMinOverrideId,
+                            'fiscal_year_id' => FiscalYearResolver::activeId(),
                         ];
                     }
                 }
@@ -774,6 +778,7 @@ class SalesInvoiceService
                     'price_classification' => $classification,
                     // S6: propagate the override id from the edit payload.
                     'below_min_override_id' => $belowMinOverrideId,
+                    'fiscal_year_id' => FiscalYearResolver::activeId(),
                 ];
             }
             DB::table('sales_invoice_items')->insert($itemRows);

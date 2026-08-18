@@ -78,6 +78,7 @@ class CustomerPayment extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'payment_code', 'payment_date', 'customer_id', 'branch_id',
         'bank_id', 'collected_by', 'payment_mode', 'amount', 'discount_amount',
         'reference_no', 'transaction_type', 'journal_entry_id', 'intercompany_journal_entry_id',

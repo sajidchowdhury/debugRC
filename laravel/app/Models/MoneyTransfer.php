@@ -52,6 +52,7 @@ class MoneyTransfer extends Model
     public $timestamps = true;
 
     protected $fillable = [
+        'fiscal_year_id',
         'transfer_code', 'transfer_date', 'transfer_type',
         'from_branch_id', 'to_branch_id',
         'from_bank_id', 'to_bank_id',

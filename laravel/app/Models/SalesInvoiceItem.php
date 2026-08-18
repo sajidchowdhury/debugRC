@@ -28,6 +28,7 @@ class SalesInvoiceItem extends Model
     // never 'Damage' at the invoice layer. Damage is tracked via
     // sales_return_items.condition_state + damage_invoices.
     protected $fillable = [
+        'fiscal_year_id',
         'sales_invoice_id', 'product_id', 'warehouse_id',
         'qty', 'rate',
         // Session 5: price + cost snapshots + classification.

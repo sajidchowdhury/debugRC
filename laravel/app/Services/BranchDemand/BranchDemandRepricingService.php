@@ -5,6 +5,7 @@ namespace App\Services\BranchDemand;
 use App\Models\BranchDemand;
 use App\Models\BranchDemandRepricing;
 use App\Services\Accounting\JournalPostingService;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -165,6 +166,7 @@ class BranchDemandRepricingService
                 'approved_by'         => $approvedBy,
                 'journal_entry_id'    => null, // Will be updated after GL posting
                 'created_by'          => $createdBy,
+                'fiscal_year_id'      => FiscalYearResolver::activeId(),
                 'created_at'          => now(),
             ]);
 
@@ -410,6 +412,7 @@ class BranchDemandRepricingService
                 'remarks'          => "Demand #{$demand->demand_code} repricing {$direction}",
                 'is_reversed'      => false,
                 'created_by'       => $postedBy,
+                'fiscal_year_id'   => FiscalYearResolver::activeId(),
                 'created_at'       => now(),
             ]);
 
@@ -427,6 +430,7 @@ class BranchDemandRepricingService
                 'remarks'          => "Demand #{$demand->demand_code} repricing {$direction}",
                 'is_reversed'      => false,
                 'created_by'       => $postedBy,
+                'fiscal_year_id'   => FiscalYearResolver::activeId(),
                 'created_at'       => now(),
             ]);
         } else {
@@ -444,6 +448,7 @@ class BranchDemandRepricingService
                 'remarks'          => "Demand #{$demand->demand_code} repricing {$direction}",
                 'is_reversed'      => false,
                 'created_by'       => $postedBy,
+                'fiscal_year_id'   => FiscalYearResolver::activeId(),
                 'created_at'       => now(),
             ]);
 
@@ -461,6 +466,7 @@ class BranchDemandRepricingService
                 'remarks'          => "Demand #{$demand->demand_code} repricing {$direction}",
                 'is_reversed'      => false,
                 'created_by'       => $postedBy,
+                'fiscal_year_id'   => FiscalYearResolver::activeId(),
                 'created_at'       => now(),
             ]);
         }

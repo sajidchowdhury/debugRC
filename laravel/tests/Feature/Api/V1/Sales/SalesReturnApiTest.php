@@ -121,7 +121,9 @@ class SalesReturnApiTest extends TestCase
         $response->assertOk();
         $data = $response->json('data');
         $this->assertNotEmpty($data);
-        collect($data)->each(fn ($row) => $this->assertSame($customerId, $row['customer_id']));
+        // The SalesReturnResource nests customer as {id, name}, not as
+        // a top-level customer_id. Check the nested relation instead.
+        collect($data)->each(fn ($row) => $this->assertSame($customerId, $row['customer']['id']));
     }
 
     // ====================================================================
@@ -139,7 +141,8 @@ class SalesReturnApiTest extends TestCase
 
         $response->assertOk();
         $response->assertJsonPath('data.id', $returnId);
-        $response->assertJsonPath('data.customer_id', $customerId);
+        // Customer is nested in the resource, not a top-level customer_id.
+        $response->assertJsonPath('data.customer.id', $customerId);
     }
 
     public function test_show_returns_404_for_unknown_id(): void

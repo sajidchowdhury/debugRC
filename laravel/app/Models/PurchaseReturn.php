@@ -72,6 +72,7 @@ class PurchaseReturn extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'return_code',
         'return_date',
         'purchase_receive_id',

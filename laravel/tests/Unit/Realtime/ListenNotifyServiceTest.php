@@ -316,7 +316,7 @@ class ListenNotifyServiceTest extends TestCase
         );
         $this->assertStringStartsWith('Sales invoices #99', $bodyB, 'Body should use the payload "table" value when present.');
         $this->assertStringContainsString('updated', $bodyB, 'Body should label UPDATE action as "updated".');
-        $this->assertStringContainsString('"status":"finalized"', $bodyB, 'Body should include change descriptions when "changes" is non-empty.');
+        $this->assertStringContainsString('status: "finalized"', $bodyB, 'Body should include change descriptions when "changes" is non-empty.');
 
         // Case C: payload is completely empty → 'record' + 'changed' + '?'.
         $bodyC = $method->invoke($this->service, 'rcerp_sales_invoice', []);

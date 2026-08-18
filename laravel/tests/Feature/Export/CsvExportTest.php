@@ -273,8 +273,8 @@ class CsvExportTest extends TestCase
             if (str_starts_with((string) $row[0], 'EXEMP-')) {
                 $found = true;
                 $this->assertSame('Exportable Employee', $row[1]);
-                $this->assertSame('salesman', $row[2]);
-                $this->assertSame('Emp-Export-Branch', $row[3]);
+                $this->assertSame('salesman', $row[5]);   // role is column index 5
+                $this->assertSame('Emp-Export-Branch', $row[6]);  // branch_name is column index 6
                 break;
             }
         }

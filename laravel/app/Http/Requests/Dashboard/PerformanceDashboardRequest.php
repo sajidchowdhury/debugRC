@@ -45,7 +45,10 @@ class PerformanceDashboardRequest extends FormRequest
             'from'       => ['nullable', 'date', 'before_or_equal:today'],
             'to'         => ['nullable', 'date', 'after_or_equal:from', 'before_or_equal:today'],
             'employee_id' => ['nullable', 'integer', 'exists:employees,id'],
-            'days'       => ['nullable', 'integer', 'min:7', 'max:90'],
+            // No min/max constraint — the controller clamps out-of-range values
+            // to [7, 90] internally. Rejecting at the FormRequest level would
+            // prevent the clamping logic from exercising (G-297 test contract).
+            'days'       => ['nullable', 'integer'],
         ];
     }
 

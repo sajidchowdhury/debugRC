@@ -4,6 +4,7 @@ namespace App\Services\BranchDemand;
 
 use App\Models\BranchDemand;
 use App\Services\Accounting\JournalPostingService;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -227,6 +228,7 @@ class BranchIntercompanyService
             'remarks'          => "Demand #{$demand->demand_code} goods sent",
             'is_reversed'      => false,
             'created_by'       => $postedBy,
+            'fiscal_year_id'   => FiscalYearResolver::activeId(),
             'created_at'       => now(),
         ]);
 
@@ -244,6 +246,7 @@ class BranchIntercompanyService
             'remarks'          => "Demand #{$demand->demand_code} goods sent",
             'is_reversed'      => false,
             'created_by'       => $postedBy,
+            'fiscal_year_id'   => FiscalYearResolver::activeId(),
             'created_at'       => now(),
         ]);
     }
@@ -294,6 +297,7 @@ class BranchIntercompanyService
             'remarks'          => $remarks,
             'is_reversed'      => false,
             'created_by'       => $postedBy,
+            'fiscal_year_id'   => FiscalYearResolver::activeId(),
             'created_at'       => now(),
         ]);
 
@@ -311,6 +315,7 @@ class BranchIntercompanyService
             'remarks'          => $remarks,
             'is_reversed'      => false,
             'created_by'       => $postedBy,
+            'fiscal_year_id'   => FiscalYearResolver::activeId(),
             'created_at'       => now(),
         ]);
     }
@@ -518,6 +523,7 @@ class BranchIntercompanyService
             'remarks'          => "Reversal of demand transfer #{$referenceId}: {$reason}",
             'is_reversed'      => false,
             'created_by'       => $reversedBy,
+            'fiscal_year_id'   => FiscalYearResolver::activeId(),
             'created_at'       => now(),
         ]);
 
@@ -534,6 +540,7 @@ class BranchIntercompanyService
             'remarks'          => "Reversal of demand transfer #{$referenceId}: {$reason}",
             'is_reversed'      => false,
             'created_by'       => $reversedBy,
+            'fiscal_year_id'   => FiscalYearResolver::activeId(),
             'created_at'       => now(),
         ]);
 

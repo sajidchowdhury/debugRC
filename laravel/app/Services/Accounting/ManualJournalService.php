@@ -4,6 +4,7 @@ namespace App\Services\Accounting;
 
 use App\Models\ApprovalRequest;
 use App\Models\ManualJournal;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -92,6 +93,7 @@ class ManualJournalService
                 'status'        => $post ? 'posted' : 'draft',
                 'journal_entry_id' => null, // filled in if posting
                 'created_by'    => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at'    => now(),
                 'updated_at'    => now(),
             ]);

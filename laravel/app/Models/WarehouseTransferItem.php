@@ -24,6 +24,7 @@ class WarehouseTransferItem extends Model
     public $timestamps = false;
 
     protected $fillable = [
+        'fiscal_year_id',
         'warehouse_transfer_id',
         'product_id',
         'qty',

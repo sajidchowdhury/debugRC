@@ -12,8 +12,8 @@ namespace App\Exceptions;
  *
  * This exception carries the full list of offending products so the
  * controller can render a user-friendly 422 response with a product table
- * (product code, name, system qty, physical qty, current stock, shortage,
- * resulting qty) instead of a raw PostgreSQL error.
+ * (product code, name, warehouse, system qty, physical qty, current stock,
+ * shortage, resulting qty) instead of a raw PostgreSQL error.
  *
  * The pre-check runs BEFORE any stock movement is applied, so the session
  * remains in its pre-post state (counting/draft) when this is thrown.
@@ -25,8 +25,8 @@ class StockTakeNegativeStockException extends \RuntimeException
 
     /**
      * @param array<int, array<string, mixed>> $offendingProducts Each element:
-     *   product_id, product_code, product_name, warehouse_id, system_qty,
-     *   physical_qty, current_stock, shortage, resulting_qty
+     *   product_id, product_code, product_name, warehouse_id, warehouse_name,
+     *   system_qty, physical_qty, current_stock, shortage, resulting_qty
      */
     public function __construct(array $offendingProducts)
     {
@@ -38,18 +38,22 @@ class StockTakeNegativeStockException extends \RuntimeException
 
         $firstDetail = '';
         if (!empty($first)) {
+            $warehouseLabel = isset($first['warehouse_name']) && $first['warehouse_name']
+                ? $first['warehouse_name']
+                : ('warehouse ' . ($first['warehouse_id'] ?? '?'));
             $firstDetail = sprintf(
-                ' First: %s (%s) — current stock %s, shortage %s would result in %s.',
+                ' Negative variance of %s for product %s (%s) in %s would result in negative stock (current: %s, variance: -%s).',
+                $first['shortage'] ?? 0,
                 $first['product_code'] ?? '?',
                 $first['product_name'] ?? '?',
+                $warehouseLabel,
                 $first['current_stock'] ?? 0,
-                $first['shortage'] ?? 0,
-                $first['resulting_qty'] ?? 0
+                $first['shortage'] ?? 0
             );
         }
 
         parent::__construct(
-            "Cannot post: {$count} product(s) would go negative.{$firstDetail}{$more} "
+            "Cannot post stock take: {$count} product(s) would go negative.{$firstDetail}{$more} "
             . 'Receive stock or correct the count before posting.'
         );
     }

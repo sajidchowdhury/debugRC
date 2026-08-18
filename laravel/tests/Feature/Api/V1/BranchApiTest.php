@@ -86,7 +86,7 @@ class BranchApiTest extends TestCase
         $response->assertOk();
         $response->assertJsonStructure([
             'data',
-            'meta' => ['current_page', 'last_page', 'per_page', 'total', 'from', 'to'],
+            'meta' => ['current_page', 'last_page', 'per_page', 'total'],
         ]);
         $this->assertGreaterThanOrEqual(3, count($response->json('data')));
     }

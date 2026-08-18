@@ -80,6 +80,7 @@ class EmployeeTransaction extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'transaction_code', 'transaction_date', 'employee_id', 'branch_id',
         'payment_mode', 'bank_id', 'transaction_type', 'amount', 'description',
         'collected_by', 'journal_entry_id', 'intercompany_journal_entry_id',

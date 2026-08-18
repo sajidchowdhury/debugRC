@@ -76,6 +76,7 @@ class SalesReturn extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'return_code', 'return_date', 'sales_invoice_id', 'customer_id', 'branch_id',
         'total_amount', 'cogs_amount', 'status',
         'confirmed_by', 'confirmed_at',

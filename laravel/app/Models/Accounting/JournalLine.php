@@ -14,6 +14,7 @@ class JournalLine extends Model
     public $timestamps = false;
 
     protected $fillable = [
+        'fiscal_year_id',
         'journal_entry_id', 'ledger_id', 'debit', 'credit',
         'entity_type', 'entity_id', 'memo', 'dimension_value_id',
         'is_bank_reconciled', 'bank_reconciliation_id',

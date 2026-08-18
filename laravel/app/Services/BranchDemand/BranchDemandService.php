@@ -8,6 +8,7 @@ use App\Models\WarehouseTransfer;
 use App\Services\MasterData\CodeGenerator;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -123,6 +124,7 @@ class BranchDemandService
                 'is_reversed'    => false,
                 'notes'          => $data['notes'] ?? null,
                 'created_by'     => $data['created_by'] ?? null,
+                'fiscal_year_id' => FiscalYearResolver::activeId(),
                 'created_at'     => now(),
                 'updated_at'     => now(),
             ]);
@@ -144,6 +146,7 @@ class BranchDemandService
                     'price_default'    => 0,
                     'receiving_branch_id' => $fromBranchId,
                     'notes'            => $item['notes'] ?? null,
+                    'fiscal_year_id'  => FiscalYearResolver::activeId(),
                 ]);
             }
 
@@ -1198,6 +1201,7 @@ class BranchDemandService
             'is_reversed'       => false,
             'notes'             => "Documentary WT for Branch Demand #{$demand->demand_code}",
             'created_by'        => $sentBy,
+            'fiscal_year_id'    => FiscalYearResolver::activeId(),
             'created_at'        => now(),
             'updated_at'        => now(),
         ]);
@@ -1209,6 +1213,7 @@ class BranchDemandService
                 'product_id'            => (int) $planItem['product_id'],
                 'qty'                   => (float) $planItem['qty'],
                 'rate'                  => (float) $planItem['cost_rate'],
+                'fiscal_year_id'        => FiscalYearResolver::activeId(),
             ]);
         }
 

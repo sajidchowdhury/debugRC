@@ -59,6 +59,7 @@ class StockTakeSession extends Model
     protected $dates = ['deleted_at'];
 
     protected $fillable = [
+        'fiscal_year_id',
         'session_code',
         'session_date',
         'branch_id',

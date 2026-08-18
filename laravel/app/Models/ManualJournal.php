@@ -58,6 +58,7 @@ class ManualJournal extends Model
     }
 
     protected $fillable = [
+        'fiscal_year_id',
         'journal_code', 'journal_date', 'branch_id', 'description',
         'total_debit', 'total_credit', 'status', 'journal_entry_id',
         'created_by', 'reversed_by', 'reversed_at', 'reverse_reason',

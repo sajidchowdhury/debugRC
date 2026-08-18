@@ -5,6 +5,7 @@ namespace App\Services\Accounting;
 use App\Models\CustomerLedger;
 use App\Models\SupplierLedger;
 use App\Models\EmployeeLedger;
+use App\Support\FiscalYearResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -69,6 +70,7 @@ class SubLedgerService
             'description' => $data['description'] ?? null,
             'journal_entry_id' => $data['journal_entry_id'] ?? null,
             'created_by' => $data['created_by'] ?? null,
+            'fiscal_year_id' => FiscalYearResolver::activeId(),
             'created_at' => now(),
         ]);
     }
@@ -114,6 +116,7 @@ class SubLedgerService
             'description' => $data['description'] ?? null,
             'journal_entry_id' => $data['journal_entry_id'] ?? null,
             'created_by' => $data['created_by'] ?? null,
+            'fiscal_year_id' => FiscalYearResolver::activeId(),
             'created_at' => now(),
         ]);
     }

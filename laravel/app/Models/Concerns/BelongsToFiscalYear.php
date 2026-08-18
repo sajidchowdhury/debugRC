@@ -86,8 +86,19 @@ trait BelongsToFiscalYear
      */
     protected static function bootBelongsToFiscalYear(): void
     {
+        // READ scope: filter all queries to the active fiscal year
         static::addGlobalScope('current_fy', function (Builder $builder): void {
             $builder->where('fiscal_year_id', FiscalYearResolver::activeId());
+        });
+
+        // WRITE safety net: auto-set fiscal_year_id on Eloquent creates
+        // when the attribute is not already populated. This covers Model::create()
+        // and $model->save() paths. DB::table() inserts are NOT covered —
+        // those must explicitly include fiscal_year_id in the insert array.
+        static::creating(function ($model): void {
+            if (empty($model->fiscal_year_id)) {
+                $model->fiscal_year_id = FiscalYearResolver::activeId();
+            }
         });
     }
 
