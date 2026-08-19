@@ -501,8 +501,13 @@ class StockTakeService
         $scope = $session->count_scope ?? 'full';
         $payload = is_array($session->count_scope_payload) ? $session->count_scope_payload : [];
 
+        // Use INNER JOIN so only products that have a warehouse_stock row
+        // for THIS warehouse are included in the count. A LEFT JOIN would
+        // pull in every active product in the system (even those with zero
+        // stock in this warehouse), which inflates item counts when seed
+        // data contains many products across all warehouses.
         $query = DB::table('products as p')
-            ->leftJoin('warehouse_stock as ws', function ($join) use ($warehouseId) {
+            ->join('warehouse_stock as ws', function ($join) use ($warehouseId) {
                 $join->on('ws.product_id', '=', 'p.id')
                      ->where('ws.warehouse_id', '=', $warehouseId);
             })
@@ -513,8 +518,8 @@ class StockTakeService
                 'p.product_code',
                 'p.product_name',
                 'p.unit',
-                DB::raw('COALESCE(ws.qty, 0) as system_qty'),
-                DB::raw('COALESCE(ws.avg_cost, 0) as rate')
+                DB::raw('ws.qty as system_qty'),
+                DB::raw('ws.avg_cost as rate')
             );
 
         switch ($scope) {

@@ -62,7 +62,9 @@ class CsvExportTest extends TestCase
         $this->assertStringContainsString('attachment', $disposition);
         $this->assertStringContainsString('.csv', $disposition);
 
-        $content = $response->streamedContent();
+        ob_start();
+        $response->sendContent();
+        $content = ob_get_clean();
 
         // UTF-8 BOM should be present (first 3 bytes).
         $this->assertSame("\xEF\xBB\xBF", substr($content, 0, 3), 'CSV is missing UTF-8 BOM.');

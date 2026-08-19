@@ -18,6 +18,13 @@ class CodeGeneratorTest extends TestCase
     use BuildsRoleUsers;
 
     /**
+     * Wrap every test in a DB transaction so L- code renames and factory
+     * rows are rolled back automatically — prevents unique-constraint
+     * conflicts from leftover _L- codes on re-runs.
+     */
+    use \Illuminate\Foundation\Testing\DatabaseTransactions;
+
+    /**
      * Temporarily rename all existing L- prefixed ledger codes to _L- prefix
      * so tests start from a clean slate. The seed data contains L- codes
      * that would otherwise cause "starts at L-0001" assertions to fail.

@@ -253,7 +253,6 @@ class DashboardApiTest extends TestCase
             'product_id'       => $product->id,
             'qty'              => 4,
             'rate'             => 50,
-            'condition_state'  => 'Good',
             // S12: sales_invoice_items is a fiscal-scoped child table
             // (config/fiscal.php: parent=['sales_invoices', 'sales_invoice_id',
             // 'invoice_date']) — NOT NULL after S1 FY-isolation. Parent

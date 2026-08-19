@@ -323,7 +323,9 @@ class GlobalAuditTest extends TestCase
         $this->assertStringContainsString('attachment', $disposition);
         $this->assertStringContainsString('.csv', $disposition);
 
-        $content = $response->streamedContent();
+        ob_start();
+        $response->sendContent();
+        $content = ob_get_clean();
 
         // UTF-8 BOM should be present.
         $this->assertSame("\xEF\xBB\xBF", substr($content, 0, 3), 'CSV should start with a UTF-8 BOM.');
@@ -357,7 +359,9 @@ class GlobalAuditTest extends TestCase
         $response = $this->get(route('admin.audit.export', ['table' => 'branches']));
 
         $response->assertOk();
-        $content = $response->streamedContent();
+        ob_start();
+        $response->sendContent();
+        $content = ob_get_clean();
 
         $this->assertStringContainsString('INCLUDE_ME', $content, 'Export with table=branches filter should include the branches entry');
         $this->assertStringNotContainsString('EXCLUDE_ME', $content, 'Export with table=branches filter should NOT include the warehouses entry');

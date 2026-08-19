@@ -106,6 +106,7 @@ class StockTakeItemApiTest extends TestCase
         DB::table('stock_take_warehouses')->insert([
             'stock_take_session_id' => $sessionId,
             'warehouse_id'          => $warehouseId2,
+            'branch_id'             => $this->branchId,
             'fiscal_year_id'        => $this->resolveActiveFiscalYearId(),
         ]);
 

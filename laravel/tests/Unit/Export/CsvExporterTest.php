@@ -324,15 +324,21 @@ class CsvExporterTest extends TestCase
     }
 
     /**
-     * Helper: invoke export() and capture the streamed body via Laravel's
-     * `streamedContent()` testing helper (which internally wraps
-     * `$response->sendContent()` in ob_start/ob_get_clean).
+     * Helper: invoke export() and capture the streamed body by executing
+     * the response callback inside ob_start/ob_get_clean.
+     *
+     * Laravel's StreamedResponse does not expose streamedContent() in all
+     * versions, so we capture the output buffer manually.
      */
     private function captureExport(string $filename, array $columns, EloquentBuilder $query): string
     {
         $response = $this->exporter->export($filename, $columns, $query);
 
-        return $response->streamedContent();
+        ob_start();
+        $response->sendContent();
+        $content = ob_get_clean();
+
+        return $content !== false ? $content : '';
     }
 
     /**

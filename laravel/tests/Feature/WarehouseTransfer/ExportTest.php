@@ -69,7 +69,9 @@ class ExportTest extends TestCase
         $response->assertOk();
         $response->assertHeader('Content-Type', 'text/csv; charset=utf-8');
 
-        $content = $response->streamedContent();
+        ob_start();
+        $response->sendContent();
+        $content = ob_get_clean();
 
         // UTF-8 BOM should be present (first 3 bytes).
         $this->assertSame(
