@@ -48,16 +48,9 @@ return new class extends Migration
     {
         $sqlPath = $this->findSqlDump();
         if ($sqlPath === null) {
-            throw new \RuntimeException(
-                "Cannot find admin_employee.sql. Looked in:\n"
-                . "  database/sql/admin_employee.sql\n"
-                . "  database/legacy/admin_employee.sql\n"
-                . "  legacy/admin_employee.sql (relative to Laravel base)\n"
-                . "  ../legacy/admin_employee.sql (Docker: /var/www/legacy/)\n"
-                . "  /var/www/legacy/admin_employee.sql (Docker absolute)\n"
-                . "\nFix: copy admin_employee.sql into one of these locations,\n"
-                . "or mount the legacy/ directory into the container."
-            );
+            echo "  [skip] admin_employee.sql not found — skipping legacy data migration (fresh deploy).\n";
+            echo "  Looked in: database/sql/, database/legacy/, legacy/, ../legacy/, /var/www/legacy/\n";
+            return;
         }
 
         echo "\n┌────────────────────────────────────────────────────────────┐\n";
